@@ -113,6 +113,16 @@ class FireDataPipeline:
         Queries by year+month to ensure full 12-month coverage
         despite SODA API throttling (~6250 records per unauthenticated query).
         """
+        # Check disk cache first
+        import os
+        cache_dir = os.path.join(os.path.dirname(__file__), '..', '.cache')
+        cache_file = os.path.join(cache_dir, 'fire_incidents.parquet')
+        if os.path.exists(cache_file):
+            print('[FETCH] Loading from disk cache...')
+            df = pd.read_parquet(cache_file)
+            print(f"[FETCH] Loaded {len(df)} records from cache")
+            return df
+
         all_records = []
 
         # Query each year+month separately to ensure full temporal coverage
@@ -154,7 +164,16 @@ class FireDataPipeline:
 
             print(f"[FETCH] Year {year}: {year_count} records")
 
+        # Save to disk cache
+        import os
+        cache_dir = os.path.join(os.path.dirname(__file__), '..', '.cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, 'fire_incidents.parquet')
+
         if all_records:
+            _df = pd.DataFrame(all_records)
+            _df.to_parquet(cache_file, index=False)
+            print(f'[FETCH] Saved {len(_df)} records to disk cache')
             print(f"[FETCH] Total: {len(all_records)} records across {len(years)} years")
             df = pd.DataFrame(all_records)
             return df

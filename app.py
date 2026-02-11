@@ -766,7 +766,8 @@ def main():
 
                     # ── Ablation: without structural_fires ─────────────
                     # Remove structural_fires from feature set
-                    ablation_cols = [c for c in fn_full if c != "structural_fires"]
+                    incident_features = {"structural_fires", "total_incidents", "non_structural_fires", "false_alarms", "medical_calls", "structural_fire_rate", "false_alarm_rate", "medical_rate", "avg_units_onscene", "winter_concentration", "summer_concentration", "trend_slope", "incident_volatility", "max_monthly_incidents", "avg_yearly_incidents", "complaints_per_incident"}
+                    ablation_cols = [c for c in fn_full if c not in incident_features]
                     ablation_idx = [fn_full.index(c) for c in ablation_cols]
 
                     X_train_abl = X_train_full[:, ablation_idx]

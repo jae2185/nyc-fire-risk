@@ -10,3 +10,4 @@ streamlit-folium>=0.15.0
 branca>=0.7.0
 matplotlib>=3.7.0
 xgboost>=2.0.0
+matplotlib
