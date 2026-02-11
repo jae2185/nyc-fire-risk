@@ -1546,20 +1546,36 @@ def main():
 
                 if len(X_train_full) > 10 and len(X_test_full) > 5:
 
-                    # ── Full model ──
-                    rf_full = train_tuned_rf(X_train_full, y_train, fn_full)
-                    gbm_full = train_xgboost(X_train_full, y_train, fn_full)
-                    rf_preds_full = rf_full["model"].predict(X_test_full)
-                    gbm_preds_full = gbm_full["model"].predict(X_test_full)
-                    rf_oos_r2 = r2_score(y_test, rf_preds_full)
-                    gbm_oos_r2 = r2_score(y_test, gbm_preds_full)
-                    rf_oos_mae = mean_absolute_error(y_test, rf_preds_full)
-                    gbm_oos_mae = mean_absolute_error(y_test, gbm_preds_full)
+                    # ── Full model (load from cache if available) ──
+                    if "rf_preds" in _vc:
+                        rf_preds_full = _vc["rf_preds"]
+                        gbm_preds_full = _vc["gbm_preds"]
+                        rf_oos_r2 = _vc["rf_r2"]
+                        gbm_oos_r2 = _vc["gbm_r2"]
+                        rf_oos_mae = _vc["rf_mae"]
+                        gbm_oos_mae = _vc["gbm_mae"]
+                        rf_cv = _vc["rf_cv"]
+                        gbm_cv = _vc["gbm_cv"]
+                        rf_name = _vc.get("rf_name", "RandomForest")
+                        gbm_name = _vc.get("gbm_name", "GradientBoosting")
+                    else:
+                        rf_full = train_tuned_rf(X_train_full, y_train, fn_full)
+                        gbm_full = train_xgboost(X_train_full, y_train, fn_full)
+                        rf_preds_full = rf_full["model"].predict(X_test_full)
+                        gbm_preds_full = gbm_full["model"].predict(X_test_full)
+                        rf_oos_r2 = r2_score(y_test, rf_preds_full)
+                        gbm_oos_r2 = r2_score(y_test, gbm_preds_full)
+                        rf_oos_mae = mean_absolute_error(y_test, rf_preds_full)
+                        gbm_oos_mae = mean_absolute_error(y_test, gbm_preds_full)
+                        rf_cv = rf_full["cv"]
+                        gbm_cv = gbm_full["cv"]
+                        rf_name = rf_full["model_name"]
+                        gbm_name = gbm_full["model_name"]
 
                     best_full_preds = gbm_preds_full if gbm_oos_r2 > rf_oos_r2 else rf_preds_full
                     best_full_r2 = max(gbm_oos_r2, rf_oos_r2)
                     best_full_mae = gbm_oos_mae if gbm_oos_r2 > rf_oos_r2 else rf_oos_mae
-                    best_full_name = gbm_full["model_name"] if gbm_oos_r2 > rf_oos_r2 else rf_full["model_name"]
+                    best_full_name = gbm_name if gbm_oos_r2 > rf_oos_r2 else rf_name
 
                     # ── Metrics ──
                     st.markdown("#### Out-of-Sample Performance")
@@ -1573,8 +1589,8 @@ def main():
                     st.markdown("---")
                     st.markdown("#### Model Comparison (Temporal Validation)")
                     comparison_data = [
-                        {"Model": "Tuned RF (all features)", "OOS R²": f"{rf_oos_r2:.3f}", "OOS MAE": f"{rf_oos_mae:.1f}", "CV R²": f"{rf_full['cv']['cv_r2_mean']:.3f}", "Features": len(fn_full)},
-                        {"Model": "GBM (all features)", "OOS R²": f"{gbm_oos_r2:.3f}", "OOS MAE": f"{gbm_oos_mae:.1f}", "CV R²": f"{gbm_full['cv']['cv_r2_mean']:.3f}", "Features": len(fn_full)},
+                        {"Model": "Tuned RF (all features)", "OOS R²": f"{rf_oos_r2:.3f}", "OOS MAE": f"{rf_oos_mae:.1f}", "CV R²": f"{rf_cv['cv_r2_mean']:.3f}", "Features": len(fn_full)},
+                        {"Model": "GBM (all features)", "OOS R²": f"{gbm_oos_r2:.3f}", "OOS MAE": f"{gbm_oos_mae:.1f}", "CV R²": f"{gbm_cv['cv_r2_mean']:.3f}", "Features": len(fn_full)},
                     ]
                     st.dataframe(pd.DataFrame(comparison_data), width="stretch")
 
