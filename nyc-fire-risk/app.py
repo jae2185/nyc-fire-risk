@@ -159,10 +159,10 @@ def main():
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Zones Analyzed", len(active_df))
-    c2.metric("Structural Fires", f"{int(active_df['structural_fires'].sum()):,}")
-    c3.metric("Critical Zones", len(active_df[active_df["risk_score"] >= 0.75]))
-    c4.metric("Model R²", f"{results['train']['r2']:.3f}")
+    c1.metric("Zones Analyzed", len(active_df), help="Number of geographic zones (zip codes, PUMAs, or boroughs) included in the analysis.")
+    c2.metric("Structural Fires", f"{int(active_df['structural_fires'].sum()):,}", help="Total structural fire incidents recorded across all zones in the training period (2019–2022).")
+    c3.metric("Critical Zones", len(active_df[active_df["risk_score"] >= 0.75]), help="Zones with a predicted risk score ≥ 0.75, indicating the highest fire risk based on the model.")
+    c4.metric("Model R²", f"{results['train']['r2']:.3f}", help="R² (coefficient of determination) on training data. 1.0 = perfect fit. Measures how well the model explains variance in fire counts.")
 
     # ─── Tabs ────────────────────────────────────────────────────────────
     tab_map, tab_rankings, tab_model, tab_explorer = st.tabs(
@@ -188,7 +188,7 @@ def main():
                 st.dataframe(
                     active_df[[label_col, "structural_fires", "risk_score", "risk_label"]]
                     .sort_values("risk_score", ascending=False),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         with col_side:
@@ -212,7 +212,7 @@ def main():
             if existing:
                 monthly_total = active_df[existing].sum().values
                 fig = make_monthly_chart(monthly_total, "Citywide Monthly Pattern")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     # ── TAB: Rankings ────────────────────────────────────────────────────
     with tab_rankings:
@@ -228,7 +228,7 @@ def main():
 
         st.dataframe(
             ranked[display_cols],
-            use_container_width=True,
+            width="stretch",
             height=500,
         )
 
@@ -236,7 +236,7 @@ def main():
         if granularity != "Borough":
             st.markdown("### Borough Comparison")
             fig = make_borough_comparison_chart(boro_features)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     # ── TAB: Model ───────────────────────────────────────────────────────
     with tab_model:
@@ -245,31 +245,32 @@ def main():
         with col_m1:
             st.markdown("### Performance Metrics")
             m1, m2, m3 = st.columns(3)
-            m1.metric("R² (Train)", f"{results['train']['r2']:.3f}")
-            m2.metric("RMSE", f"{results['train']['rmse']:.1f}")
-            m3.metric("MAE", f"{results['train']['mae']:.1f}")
+            m1.metric("R² (Train)", f"{results['train']['r2']:.3f}", help="Proportion of variance in fire counts explained by the model on training data. Higher is better; 1.0 is perfect.")
+            m2.metric("RMSE", f"{results['train']['rmse']:.1f}", help="Root Mean Squared Error — average prediction error in fire counts. Lower is better. Penalizes large errors more than MAE.")
+            m3.metric("MAE", f"{results['train']['mae']:.1f}", help="Mean Absolute Error — average absolute difference between predicted and actual fire counts. Lower is better.")
 
             cv = results["cv"]
             st.metric(
                 "R² (5-Fold CV)",
                 f"{cv['cv_r2_mean']:.3f} ± {cv['cv_r2_std']:.3f}",
+                help="Cross-validated R² using 5 random train/test splits. Tests generalization — a score close to training R² means the model isn't overfitting.",
             )
 
             # Actual vs Predicted
             X, y = data["X"], data["y"]
             preds = model.predict(X)
             fig = make_actual_vs_predicted_chart(y, preds)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_m2:
             st.markdown("### Feature Importance")
             fig = make_feature_importance_chart(results["importance"])
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Risk distribution
             st.markdown("### Risk Distribution")
             fig = make_risk_distribution_chart(active_df["risk_score"].values)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         # Model description
         with st.expander("Model Architecture Details"):
@@ -325,11 +326,11 @@ def main():
                     unsafe_allow_html=True,
                 )
 
-                st.metric("Structural Fires", int(row["structural_fires"]))
-                st.metric("Total Incidents", int(row["total_incidents"]))
-                st.metric("Structural Fire Rate", f"{row['structural_fire_rate']:.1%}")
-                st.metric("Predicted Fires", f"{row['predicted_fires']:.0f}")
-                st.metric("Avg Units on Scene", f"{row['avg_units_onscene']:.1f}")
+                st.metric("Structural Fires", int(row["structural_fires"]), help="Number of structural fire incidents in this zone during the training period.")
+                st.metric("Total Incidents", int(row["total_incidents"]), help="All FDNY responses in this zone, including medical calls, false alarms, and non-structural fires.")
+                st.metric("Structural Fire Rate", f"{row['structural_fire_rate']:.1%}", help="Percentage of all incidents that were structural fires. Higher rates may indicate aging infrastructure or code violations.")
+                st.metric("Predicted Fires", f"{row['predicted_fires']:.0f}", help="Model prediction of expected structural fire count based on building characteristics, complaints, violations, and historical patterns.")
+                st.metric("Avg Units on Scene", f"{row['avg_units_onscene']:.1f}", help="Average number of FDNY units dispatched per incident. Higher values suggest more severe incidents requiring greater response.")
 
                 if "trend_slope" in row.index:
                     trend = row["trend_slope"]
@@ -347,7 +348,7 @@ def main():
                 if existing:
                     monthly_vals = [row[c] for c in existing]
                     fig = make_monthly_chart(monthly_vals, f"Monthly Distribution — {selected}")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Show constituent zips for PUMA view
                 if granularity == "PUMA" and "puma_code" in row.index:
@@ -358,7 +359,7 @@ def main():
                         st.dataframe(
                             constituent_zips[["zip_code", "structural_fires", "risk_score", "risk_label"]]
                             .sort_values("risk_score", ascending=False),
-                            use_container_width=True,
+                            width="stretch",
                             height=250,
                         )
 
