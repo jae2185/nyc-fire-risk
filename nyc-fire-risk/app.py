@@ -227,13 +227,7 @@ def main():
         display_cols = [c for c in display_cols if c in ranked.columns]
 
         st.dataframe(
-            ranked[display_cols].style.format({
-                "structural_fire_rate": "{:.1%}",
-                "risk_score": "{:.3f}",
-                "predicted_fires": "{:.0f}",
-            }).background_gradient(
-                subset=["risk_score"], cmap="YlOrRd"
-            ),
+            ranked[display_cols],
             use_container_width=True,
             height=500,
         )
@@ -363,9 +357,7 @@ def main():
                         st.markdown(f"**Constituent Zip Codes** ({len(constituent_zips)})")
                         st.dataframe(
                             constituent_zips[["zip_code", "structural_fires", "risk_score", "risk_label"]]
-                            .sort_values("risk_score", ascending=False)
-                            .style.format({"risk_score": "{:.3f}"})
-                            .background_gradient(subset=["risk_score"], cmap="YlOrRd"),
+                            .sort_values("risk_score", ascending=False),
                             use_container_width=True,
                             height=250,
                         )
