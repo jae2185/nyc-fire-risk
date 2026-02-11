@@ -911,9 +911,15 @@ def main():
                         "Confirms the model generalizes across different time periods, not just one split."
                     )
 
-                    with st.spinner("Running rolling temporal CV..."):
+                    rolling_cache = Path("data/rolling_cv_cache.pkl")
+                    years_available = sorted(raw_df["year"].unique())
+                    if rolling_cache.exists():
+                        import pickle as _pkl
+                        with open(rolling_cache, "rb") as _f:
+                            rolling_results = _pkl.load(_f)
+                    else:
+                     with st.spinner("Running rolling temporal CV..."):
                         rolling_results = []
-                        years_available = sorted(raw_df["year"].unique())
                         # Need at least 2 years to train, 1 to test
                         for test_yr in years_available[2:]:
                             train_slice = raw_df[raw_df["year"] < test_yr]
@@ -951,6 +957,11 @@ def main():
                                 })
                             except Exception:
                                 continue
+
+                     if not rolling_cache.exists() and rolling_results:
+                        import pickle as _pkl
+                        with open(rolling_cache, "wb") as _f:
+                            _pkl.dump(rolling_results, _f)
 
                     if rolling_results:
                         roll_df = pd.DataFrame(rolling_results)
@@ -999,7 +1010,25 @@ def main():
                         "Tests whether the model generalizes geographically or just memorizes borough-level patterns."
                     )
 
-                    with st.spinner("Running borough holdout CV..."):
+                    boro_cache = Path("data/borough_cv_cache.pkl")
+                    if boro_cache.exists():
+                        import pickle as _pkl
+                        with open(boro_cache, "rb") as _f:
+                            borough_results = _pkl.load(_f)
+                    else:
+                     boro_cache = Path("data/borough_cv_cache.pkl")
+                    if boro_cache.exists():
+                        import pickle as _pkl
+                        with open(boro_cache, "rb") as _f:
+                            borough_results = _pkl.load(_f)
+                    else:
+                     boro_cache = Path("data/borough_cv_cache.pkl")
+                    if boro_cache.exists():
+                        import pickle as _pkl
+                        with open(boro_cache, "rb") as _f:
+                            borough_results = _pkl.load(_f)
+                    else:
+                     with st.spinner("Running borough holdout CV..."):
                         borough_results = []
                         if "borough" in train_features.columns:
                             borough_col = "borough"
@@ -1230,7 +1259,25 @@ def main():
                     st.markdown("##### Rolling Temporal CV (Classification, No Fire History)")
                     st.caption("Same expanding-window approach, but testing the non-fire classification model.")
 
-                    with st.spinner("Running classification rolling CV..."):
+                    cls_roll_cache = Path("data/cls_rolling_cache.pkl")
+                    if cls_roll_cache.exists():
+                        import pickle as _pkl
+                        with open(cls_roll_cache, "rb") as _f:
+                            cls_rolling = _pkl.load(_f)
+                    else:
+                     cls_roll_cache = Path("data/cls_rolling_cache.pkl")
+                    if cls_roll_cache.exists():
+                        import pickle as _pkl
+                        with open(cls_roll_cache, "rb") as _f:
+                            cls_rolling = _pkl.load(_f)
+                    else:
+                     cls_roll_cache = Path("data/cls_rolling_cache.pkl")
+                    if cls_roll_cache.exists():
+                        import pickle as _pkl
+                        with open(cls_roll_cache, "rb") as _f:
+                            cls_rolling = _pkl.load(_f)
+                    else:
+                     with st.spinner("Running classification rolling CV..."):
                         cls_rolling = []
                         for test_yr in years_available[2:]:
                             train_slice = raw_df[raw_df["year"] < test_yr]
@@ -1318,7 +1365,25 @@ def main():
                     st.markdown("##### Borough Holdout (Classification, No Fire History)")
                     st.caption("Hold out one borough at a time. Tests geographic generalization of non-fire risk classification.")
 
-                    with st.spinner("Running classification borough holdout..."):
+                    cls_boro_cache = Path("data/cls_borough_cache.pkl")
+                    if cls_boro_cache.exists():
+                        import pickle as _pkl
+                        with open(cls_boro_cache, "rb") as _f:
+                            cls_borough = _pkl.load(_f)
+                    else:
+                     cls_boro_cache = Path("data/cls_borough_cache.pkl")
+                    if cls_boro_cache.exists():
+                        import pickle as _pkl
+                        with open(cls_boro_cache, "rb") as _f:
+                            cls_borough = _pkl.load(_f)
+                    else:
+                     cls_boro_cache = Path("data/cls_borough_cache.pkl")
+                    if cls_boro_cache.exists():
+                        import pickle as _pkl
+                        with open(cls_boro_cache, "rb") as _f:
+                            cls_borough = _pkl.load(_f)
+                    else:
+                     with st.spinner("Running classification borough holdout..."):
                         cls_borough = []
                         if borough_col and all_features_combined[borough_col].notna().sum() > 0:
                             abl_cols_all = [c for c in fn_all if c not in incident_features]
