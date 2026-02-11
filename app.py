@@ -363,7 +363,7 @@ def main():
             if existing:
                 monthly_total = active_df[existing].sum().values
                 fig = make_monthly_chart(monthly_total, "Citywide Monthly Pattern")
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
 
     # ── TAB: Rankings ────────────────────────────────────────────────────
     with tab_rankings:
@@ -387,7 +387,7 @@ def main():
         if granularity != "Borough":
             st.markdown("### Borough Comparison")
             fig = make_borough_comparison_chart(boro_features)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
 
     # ── TAB: Model ───────────────────────────────────────────────────────
     with tab_model:
@@ -410,17 +410,17 @@ def main():
             X, y = data["X"], data["y"]
             preds = results["model"].predict(X)
             fig = make_actual_vs_predicted_chart(y, preds)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
 
         with col_m2:
             st.markdown("### Feature Importance")
             fig = make_feature_importance_chart(results["importance"])
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
 
             # Risk distribution
             st.markdown("### Risk Distribution")
             fig = make_risk_distribution_chart(active_df["risk_score"].values)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
 
         # Model comparison table
         if "model_comparison" in data:
@@ -512,7 +512,7 @@ def main():
                 if existing:
                     monthly_vals = [row[c] for c in existing]
                     fig = make_monthly_chart(monthly_vals, f"Monthly Distribution — {selected_explorer}")
-                    st.plotly_chart(fig, width="stretch")
+                    st.plotly_chart(fig, use_container_width=True)
 
                 # Show constituent zips for PUMA view
                 if granularity == "PUMA" and "puma_code" in row.index:
@@ -841,7 +841,7 @@ def main():
                         st.markdown("**Actual vs Predicted (Best Full Model)**")
                         fig = make_actual_vs_predicted_chart(y_test, best_full_preds)
                         fig.update_layout(title=f"Out-of-Sample: {best_full_name}")
-                        st.plotly_chart(fig, width="stretch")
+                        st.plotly_chart(fig, use_container_width=True)
 
                     with val_col2:
                         st.markdown("**Risk Tier Validation**")
@@ -892,7 +892,7 @@ def main():
                                 plot_bgcolor="#131820",
                                 font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
                             )
-                            st.plotly_chart(fig2, width="stretch")
+                            st.plotly_chart(fig2, use_container_width=True)
 
                             st.markdown("**Tier Breakdown**")
                             tier_display = tier_summary.copy()
@@ -994,7 +994,7 @@ def main():
                             plot_bgcolor="#131820",
                             font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
                         )
-                        st.plotly_chart(fig_cm, width="stretch")
+                        st.plotly_chart(fig_cm, use_container_width=True)
 
                     with cls_col2:
                         importances_cls = best_cls.feature_importances_
@@ -1018,7 +1018,7 @@ def main():
                             font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
                             margin=dict(l=180),
                         )
-                        st.plotly_chart(fig_imp_cls, width="stretch")
+                        st.plotly_chart(fig_imp_cls, use_container_width=True)
 
                     st.info(
                         f"\U0001f4a1 **Key finding:** Without any fire history, building characteristics and demographics "
