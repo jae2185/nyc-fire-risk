@@ -107,7 +107,7 @@ class FireDataPipeline:
         self.processed_data = None
 
     @st.cache_data(ttl=3600, show_spinner=False)
-    def fetch_fire_incidents(_self, limit: int = 50000) -> pd.DataFrame:
+    def fetch_fire_incidents(_self, limit: int = 200000) -> pd.DataFrame:
         """
         Fetch fire incident data from the SODA API.
         Falls back to synthetic data if the API is unavailable.
@@ -120,7 +120,7 @@ class FireDataPipeline:
             url = (
                 f"{ENDPOINTS['fire_incidents']['base']}"
                 f"?$limit={batch_size}&$offset={offset}"
-                f"&$order=incident_date_time DESC"
+                f"&$order=incident_date_time ASC"
             )
             try:
                 resp = requests.get(url, timeout=30)
@@ -257,7 +257,7 @@ class FireDataPipeline:
         self.processed_data = df
         return df
 
-    def fetch_and_process(self, limit: int = 50000) -> pd.DataFrame:
+    def fetch_and_process(self, limit: int = 200000) -> pd.DataFrame:
         """Full pipeline: fetch → clean → return."""
         raw = self.fetch_fire_incidents(limit=limit)
         return self.process(raw)

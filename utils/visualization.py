@@ -89,7 +89,7 @@ def make_feature_importance_chart(importance_df: pd.DataFrame, top_n: int = 10) 
     return fig
 
 
-def make_monthly_chart(monthly_data: object, title: str = "Monthly Distribution") -> go.Figure:
+def make_monthly_chart(monthly_data: list | np.ndarray, title: str = "Monthly Distribution") -> go.Figure:
     """Bar chart of monthly incident distribution."""
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -213,8 +213,8 @@ def make_borough_comparison_chart(boro_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def create_folium_map(features_df, risk_scores, label_col, center=None, zoom=11):
-    """Create a Folium map with risk-colored circle markers."""
+def create_folium_map(features_df, risk_scores, label_col, center=None, zoom=11, highlight_zone=None):
+    """Create a Folium map with risk-colored circle markers and optional highlight."""
     import folium
     from branca.colormap import LinearColormap
 
@@ -243,8 +243,11 @@ def create_folium_map(features_df, risk_scores, label_col, center=None, zoom=11)
         label = row.get(label_col, str(idx))
         fires = row.get("structural_fires", 0)
         total = row.get("total_incidents", 0)
+        is_highlighted = (highlight_zone is not None and label == highlight_zone)
 
         radius = 5 + risk * 20
+        if is_highlighted:
+            radius = max(radius, 18)
 
         popup_html = f"""
         <div style="font-family:monospace;font-size:12px;min-width:150px">
@@ -259,13 +262,25 @@ def create_folium_map(features_df, risk_scores, label_col, center=None, zoom=11)
         folium.CircleMarker(
             location=[lat, lng],
             radius=radius,
-            color=risk_color(risk),
+            color="#FFFFFF" if is_highlighted else risk_color(risk),
+            weight=3 if is_highlighted else 1,
             fill=True,
             fill_color=risk_color(risk),
-            fill_opacity=0.6,
+            fill_opacity=0.85 if is_highlighted else 0.6,
             popup=folium.Popup(popup_html, max_width=250),
             tooltip=f"{label} — {risk_label(risk)} Risk",
         ).add_to(m)
+
+        # Pulsing outer ring for highlighted zone
+        if is_highlighted:
+            folium.CircleMarker(
+                location=[lat, lng],
+                radius=radius + 8,
+                color="#FFFFFF",
+                weight=1,
+                fill=False,
+                opacity=0.4,
+            ).add_to(m)
 
     colormap.add_to(m)
     return m
