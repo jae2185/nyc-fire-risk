@@ -110,49 +110,57 @@ class FireDataPipeline:
     def fetch_fire_incidents(_self, limit: int = 200000) -> pd.DataFrame:
         """
         Fetch fire incident data from the SODA API.
-        Samples across multiple years for representative coverage.
+        Queries by year+month to ensure full 12-month coverage
+        despite SODA API throttling (~6250 records per unauthenticated query).
         """
         all_records = []
-        batch_size = 10000
-        years = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-        per_year_limit = limit // len(years)
+
+        # Query each year+month separately to ensure full temporal coverage
+        years = [2019, 2020, 2021, 2022, 2023, 2024]
+        months = list(range(1, 13))
+        per_month_limit = 50000
 
         for year in years:
-            offset = 0
-            year_records = 0
-            while year_records < per_year_limit:
-                fetch_size = min(batch_size, per_year_limit - year_records)
-                url = ENDPOINTS['fire_incidents']['base']
+            year_count = 0
+            for month in months:
+                # Build date range for this month
+                if month == 12:
+                    next_year, next_month = year + 1, 1
+                else:
+                    next_year, next_month = year, month + 1
+
+                date_start = f"{year}-{month:02d}-01T00:00:00"
+                date_end = f"{next_year}-{next_month:02d}-01T00:00:00"
+
                 params = {
-                    '$limit': fetch_size,
-                    '$offset': offset,
-                    '$where': f"incident_date_time >= '{year}-01-01T00:00:00' AND incident_date_time < '{year + 1}-01-01T00:00:00'",
-                    '$order': 'incident_date_time',
+                    "$limit": per_month_limit,
+                    "$where": f"incident_date_time >= '{date_start}' AND incident_date_time < '{date_end}'",
+                    "$order": "incident_date_time",
                 }
                 try:
-                    resp = requests.get(url, params=params, timeout=30)
+                    resp = requests.get(
+                        ENDPOINTS["fire_incidents"]["base"],
+                        params=params,
+                        timeout=30,
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
-                        if not data:
-                            break
-                        all_records.extend(data)
-                        year_records += len(data)
-                        offset += fetch_size
-                        if len(data) < fetch_size:
-                            break
-                    else:
-                        break
+                        if data:
+                            all_records.extend(data)
+                            year_count += len(data)
                 except Exception as e:
-                    print(f'API error year {year} offset {offset}: {e}')
-                    break
-                time.sleep(0.2)
-            print(f'[FETCH] Year {year}: {year_records} records')
+                    print(f"[FETCH] Error {year}-{month:02d}: {e}")
+                time.sleep(0.15)
+
+            print(f"[FETCH] Year {year}: {year_count} records")
 
         if all_records:
-            print(f'[FETCH] Total: {len(all_records)} records across {len(years)} years')
-            return pd.DataFrame(all_records)
+            print(f"[FETCH] Total: {len(all_records)} records across {len(years)} years")
+            df = pd.DataFrame(all_records)
+            return df
         else:
             return _self._generate_synthetic_data()
+
 
     def _generate_synthetic_data(self) -> pd.DataFrame:
         """

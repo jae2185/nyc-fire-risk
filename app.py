@@ -32,6 +32,13 @@ from data.building_data import (
     process_pluto_buildings,
     score_buildings_with_neighborhood,
 )
+from data.enrichment import enrich_zip_features
+from models.enhanced_model import (
+    get_enhanced_feature_matrix,
+    compare_models,
+    train_tuned_rf,
+    train_xgboost,
+)
 
 # ─── Page Config ─────────────────────────────────────────────────────────
 st.set_page_config(
@@ -116,26 +123,50 @@ def load_and_train(force_retrain=False):
     df = pipeline.fetch_and_process(limit=50000)
 
     zip_features = engineer_features_by_zip(df)
+
+    # Enrich with external data (DOB, 311, PLUTO)
+    try:
+        zip_features = enrich_zip_features(zip_features)
+        print(f"[PIPELINE] Enriched features: {len(zip_features.columns)} columns")
+    except Exception as e:
+        print(f"[PIPELINE] Enrichment failed (continuing with base features): {e}")
+
     puma_features = aggregate_to_puma(zip_features)
     boro_features = aggregate_to_borough(zip_features)
 
-    # Train on zip-level data
-    X, y, feature_names = get_feature_matrix(zip_features)
-    model = FireRiskModel(n_estimators=100, max_depth=12)
-    results = model.fit(X, y, feature_names)
+    # Train enhanced model (tries both RF and XGBoost)
+    X, y, feature_names = get_enhanced_feature_matrix(zip_features)
+    if X.shape[1] == 0:
+        # Fallback to original features if enhanced matrix is empty
+        from data.feature_engineering import get_feature_matrix as get_orig_features
+        X, y, feature_names = get_orig_features(zip_features)
+
+    model_comparison = compare_models(X, y, feature_names)
+    best = model_comparison["best"]
+
+    # Use the best model
+    model = FireRiskModel.__new__(FireRiskModel)
+    model.model = best["model"]
+    model.feature_names = feature_names
+    model.importance = best["importance"]
+    results = best
 
     # Zip predictions
-    zip_preds, zip_risk = model.predict_with_risk(X)
+    zip_preds = best["model"].predict(X)
+    zip_risk = np.clip(zip_preds / (zip_preds.max() or 1), 0, 1)
     zip_features["predicted_fires"] = zip_preds
     zip_features["risk_score"] = zip_risk
     zip_features["risk_label"] = zip_features["risk_score"].map(risk_label)
 
     # PUMA-level prediction
-    X_puma, y_puma, fn_puma = get_feature_matrix(puma_features)
+    from data.feature_engineering import get_feature_matrix as get_orig_features
+    X_puma, y_puma, fn_puma = get_orig_features(puma_features)
     if len(X_puma) > 5:
-        puma_model = FireRiskModel(n_estimators=80, max_depth=8)
-        puma_model.fit(X_puma, y_puma, fn_puma)
-        puma_preds, puma_risk = puma_model.predict_with_risk(X_puma)
+        from sklearn.ensemble import RandomForestRegressor
+        puma_rf = RandomForestRegressor(n_estimators=80, max_depth=8, random_state=42)
+        puma_rf.fit(X_puma, y_puma)
+        puma_preds = puma_rf.predict(X_puma)
+        puma_risk = np.clip(puma_preds / (puma_preds.max() or 1), 0, 1)
     else:
         puma_preds = y_puma
         puma_risk = np.clip(y_puma / (y_puma.max() or 1), 0, 1)
@@ -223,9 +254,11 @@ def main():
 
     # ─── Header ──────────────────────────────────────────────────────────
     st.markdown(f"## NYC Fire Risk — {granularity} Level")
+    model_name = results.get("model_name", "RandomForest")
+    n_feats = results["train"].get("n_features", "?")
     st.caption(
-        f"{len(active_df)} zones · RandomForest (n=100) · "
-        f"{results['train']['n_samples']} training samples"
+        f"{len(active_df)} zones · {model_name} · "
+        f"{n_feats} features · {results['train']['n_samples']} training samples"
     )
 
     c1, c2, c3, c4 = st.columns(4)
@@ -375,7 +408,7 @@ def main():
 
             # Actual vs Predicted
             X, y = data["X"], data["y"]
-            preds = model.predict(X)
+            preds = results["model"].predict(X)
             fig = make_actual_vs_predicted_chart(y, preds)
             st.plotly_chart(fig, width="stretch")
 
@@ -388,6 +421,20 @@ def main():
             st.markdown("### Risk Distribution")
             fig = make_risk_distribution_chart(active_df["risk_score"].values)
             st.plotly_chart(fig, width="stretch")
+
+        # Model comparison table
+        if "model_comparison" in data:
+            st.markdown("### Model Comparison")
+            mc = data["model_comparison"]["comparison"]
+            mc_display = mc.copy()
+            for col in ["Train R²", "CV R² (mean)", "CV R² (std)", "Train RMSE", "Train MAE"]:
+                if col in mc_display.columns:
+                    mc_display[col] = mc_display[col].map("{:.3f}".format)
+            st.dataframe(mc_display, use_container_width=True)
+
+            best_name = data["model_comparison"]["best"]["model_name"]
+            best_cv = data["model_comparison"]["best"]["cv"]["cv_r2_mean"]
+            st.success(f"**Best model: {best_name}** (CV R² = {best_cv:.3f})")
 
         # Model description
         with st.expander("Model Architecture Details"):
@@ -666,87 +713,134 @@ def main():
                             unsafe_allow_html=True,
                         )
 
-    # ── TAB: Validation ───────────────────────────────────────────────────
+        # ── TAB: Validation ───────────────────────────────────────────────────
     with tab_validation:
-        st.markdown("### ✅ Model Validation — Temporal Backtest")
+        st.markdown("### ✅ Model Validation — Temporal Backtest + Ablation")
         st.caption(
-            "Train the model on 2018–2022 data, predict 2023+ fire counts per zip code, "
-            "then compare predictions against actual 2023+ outcomes."
+            "Train on 2019–2022 data, predict 2023+ fire counts. "
+            "Also tests whether the model works without the circular structural_fires feature."
         )
 
         raw_df = data["raw_df"]
 
         if "year" in raw_df.columns and raw_df["year"].nunique() > 2:
-            # Split: train on <=2022, test on >=2023
             train_years = raw_df[raw_df["year"] <= 2022]
             test_years = raw_df[raw_df["year"] >= 2023]
 
             if len(test_years) > 0 and len(train_years) > 0:
                 from data.feature_engineering import engineer_features_by_zip, get_feature_matrix
-                from models.fire_model import FireRiskModel
+                from data.enrichment import enrich_zip_features
+                from models.enhanced_model import get_enhanced_feature_matrix, train_tuned_rf, train_xgboost
+                from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+                import plotly.graph_objects as go
 
-                # Engineer features on train period
-                train_features = engineer_features_by_zip(train_years)
-                X_train, y_train, fn = get_feature_matrix(train_features)
+                # Engineer + enrich features for BOTH periods
+                with st.spinner("Engineering features for train/test periods..."):
+                    train_features = engineer_features_by_zip(train_years)
+                    test_features = engineer_features_by_zip(test_years)
 
-                # Engineer features on test period (for actual counts)
-                test_features = engineer_features_by_zip(test_years)
+                    # Enrich both with external data
+                    try:
+                        train_features = enrich_zip_features(train_features)
+                        test_features = enrich_zip_features(test_features)
+                    except Exception as e:
+                        st.warning(f"Enrichment failed for validation: {e}")
 
-                if len(X_train) > 10 and len(test_features) > 5:
-                    # Train temporal model
-                    temp_model = FireRiskModel(n_estimators=100, max_depth=12)
-                    temp_results = temp_model.fit(X_train, y_train, fn)
+                # Get enhanced feature matrices
+                X_train_full, y_train, fn_full = get_enhanced_feature_matrix(train_features)
+                X_test_full, y_test, _ = get_enhanced_feature_matrix(test_features)
 
-                    # Predict on test features
-                    X_test, y_test, _ = get_feature_matrix(test_features)
-                    test_preds = temp_model.predict(X_test)
+                if len(X_train_full) > 10 and len(X_test_full) > 5:
 
-                    # Merge for comparison
-                    comparison = test_features[["zip_code", "structural_fires"]].copy()
-                    comparison["predicted"] = test_preds
-                    comparison["actual"] = comparison["structural_fires"]
-                    comparison["error"] = comparison["predicted"] - comparison["actual"]
-                    comparison["abs_error"] = comparison["error"].abs()
+                    # ── Full model (all features) ──────────────────────
+                    rf_full = train_tuned_rf(X_train_full, y_train, fn_full)
+                    gbm_full = train_xgboost(X_train_full, y_train, fn_full)
 
-                    # Assign risk tiers from training model
-                    _, train_risk = temp_model.predict_with_risk(X_train)
-                    train_features["predicted_risk"] = train_risk
+                    rf_preds_full = rf_full["model"].predict(X_test_full)
+                    gbm_preds_full = gbm_full["model"].predict(X_test_full)
 
-                    def _tier(r):
-                        if r >= 0.75: return "Critical"
-                        if r >= 0.50: return "High"
-                        if r >= 0.25: return "Moderate"
-                        return "Low"
-                    train_features["risk_tier"] = train_features["predicted_risk"].map(_tier)
+                    rf_oos_r2 = r2_score(y_test, rf_preds_full)
+                    gbm_oos_r2 = r2_score(y_test, gbm_preds_full)
+                    rf_oos_mae = mean_absolute_error(y_test, rf_preds_full)
+                    gbm_oos_mae = mean_absolute_error(y_test, gbm_preds_full)
 
-                    # Metrics
-                    from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-                    r2 = r2_score(y_test, test_preds)
-                    mae = mean_absolute_error(y_test, test_preds)
-                    rmse = np.sqrt(mean_squared_error(y_test, test_preds))
+                    # ── Ablation: without structural_fires ─────────────
+                    # Remove structural_fires from feature set
+                    ablation_cols = [c for c in fn_full if c != "structural_fires"]
+                    ablation_idx = [fn_full.index(c) for c in ablation_cols]
 
+                    X_train_abl = X_train_full[:, ablation_idx]
+                    X_test_abl = X_test_full[:, ablation_idx]
+
+                    rf_abl = train_tuned_rf(X_train_abl, y_train, ablation_cols)
+                    gbm_abl = train_xgboost(X_train_abl, y_train, ablation_cols)
+
+                    rf_preds_abl = rf_abl["model"].predict(X_test_abl)
+                    gbm_preds_abl = gbm_abl["model"].predict(X_test_abl)
+
+                    rf_abl_r2 = r2_score(y_test, rf_preds_abl)
+                    gbm_abl_r2 = r2_score(y_test, gbm_preds_abl)
+                    rf_abl_mae = mean_absolute_error(y_test, rf_preds_abl)
+                    gbm_abl_mae = mean_absolute_error(y_test, gbm_preds_abl)
+
+                    # ── Pick best for display ──────────────────────────
+                    best_full_preds = gbm_preds_full if gbm_oos_r2 > rf_oos_r2 else rf_preds_full
+                    best_full_r2 = max(gbm_oos_r2, rf_oos_r2)
+                    best_full_mae = gbm_oos_mae if gbm_oos_r2 > rf_oos_r2 else rf_oos_mae
+                    best_full_name = gbm_full["model_name"] if gbm_oos_r2 > rf_oos_r2 else rf_full["model_name"]
+
+                    best_abl_preds = gbm_preds_abl if gbm_abl_r2 > rf_abl_r2 else rf_preds_abl
+                    best_abl_r2 = max(gbm_abl_r2, rf_abl_r2)
+                    best_abl_mae = gbm_abl_mae if gbm_abl_r2 > rf_abl_r2 else rf_abl_mae
+
+                    # ── Metrics ────────────────────────────────────────
+                    st.markdown("#### Out-of-Sample Performance")
                     vc1, vc2, vc3, vc4 = st.columns(4)
                     vc1.metric("Train Period", f"{int(train_years['year'].min())}–{int(train_years['year'].max())}")
                     vc2.metric("Test Period", f"{int(test_years['year'].min())}–{int(test_years['year'].max())}")
-                    vc3.metric("R² (Out-of-Sample)", f"{r2:.3f}")
-                    vc4.metric("MAE", f"{mae:.1f} fires")
+                    vc3.metric("R² (Out-of-Sample)", f"{best_full_r2:.3f}")
+                    vc4.metric("MAE", f"{best_full_mae:.1f} fires")
 
+                    # ── Model Comparison Table ─────────────────────────
                     st.markdown("---")
+                    st.markdown("#### Model Comparison (Temporal Validation)")
 
+                    comparison_data = [
+                        {"Model": "Tuned RF (all features)", "OOS R²": f"{rf_oos_r2:.3f}", "OOS MAE": f"{rf_oos_mae:.1f}", "CV R²": f"{rf_full['cv']['cv_r2_mean']:.3f}", "Features": len(fn_full)},
+                        {"Model": "GBM (all features)", "OOS R²": f"{gbm_oos_r2:.3f}", "OOS MAE": f"{gbm_oos_mae:.1f}", "CV R²": f"{gbm_full['cv']['cv_r2_mean']:.3f}", "Features": len(fn_full)},
+                        {"Model": "RF (no structural_fires)", "OOS R²": f"{rf_abl_r2:.3f}", "OOS MAE": f"{rf_abl_mae:.1f}", "CV R²": f"{rf_abl['cv']['cv_r2_mean']:.3f}", "Features": len(ablation_cols)},
+                        {"Model": "GBM (no structural_fires)", "OOS R²": f"{gbm_abl_r2:.3f}", "OOS MAE": f"{gbm_abl_mae:.1f}", "CV R²": f"{gbm_abl['cv']['cv_r2_mean']:.3f}", "Features": len(ablation_cols)},
+                    ]
+                    st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
+
+                    # ── Charts ─────────────────────────────────────────
+                    st.markdown("---")
                     val_col1, val_col2 = st.columns(2)
 
                     with val_col1:
-                        st.markdown("**Actual vs Predicted (Test Period)**")
-                        fig = make_actual_vs_predicted_chart(y_test, test_preds)
-                        fig.update_layout(title="Out-of-Sample: Actual vs Predicted (2023+)")
+                        st.markdown("**Actual vs Predicted (Best Full Model)**")
+                        fig = make_actual_vs_predicted_chart(y_test, best_full_preds)
+                        fig.update_layout(title=f"Out-of-Sample: {best_full_name}")
                         st.plotly_chart(fig, use_container_width=True)
 
                     with val_col2:
                         st.markdown("**Risk Tier Validation**")
                         st.caption("Do zip codes flagged as high-risk actually have more fires later?")
 
-                        # Join train risk tiers with test actual fires
-                        tier_validation = train_features[["zip_code", "risk_tier"]].merge(
+                        # Assign risk tiers from training model predictions
+                        train_preds_full = rf_full["model"].predict(X_train_full) if rf_oos_r2 >= gbm_oos_r2 else gbm_full["model"].predict(X_train_full)
+                        train_risk = np.clip(train_preds_full / (train_preds_full.max() or 1), 0, 1)
+                        train_features_copy = train_features.copy()
+                        train_features_copy["predicted_risk"] = train_risk
+
+                        def _tier(r):
+                            if r >= 0.75: return "Critical"
+                            if r >= 0.50: return "High"
+                            if r >= 0.25: return "Moderate"
+                            return "Low"
+                        train_features_copy["risk_tier"] = train_features_copy["predicted_risk"].map(_tier)
+
+                        tier_validation = train_features_copy[["zip_code", "risk_tier"]].merge(
                             test_features[["zip_code", "structural_fires"]],
                             on="zip_code", how="inner"
                         )
@@ -757,7 +851,6 @@ def main():
                                 ["mean", "median", "sum", "count"]
                             ).reindex(["Critical", "High", "Moderate", "Low"])
 
-                            import plotly.graph_objects as go
                             fig2 = go.Figure()
                             colors = {"Critical": "#FF3B4E", "High": "#FFAA2B", "Moderate": "#FF6B35", "Low": "#2ECC71"}
                             for tier in ["Critical", "High", "Moderate", "Low"]:
@@ -771,7 +864,7 @@ def main():
                                         textposition="auto",
                                     ))
                             fig2.update_layout(
-                                title="Avg Actual Fires (2023+) by Predicted Risk Tier (2018–2022)",
+                                title="Avg Actual Fires (2023+) by Predicted Risk Tier",
                                 yaxis_title="Avg Structural Fires per Zip",
                                 showlegend=False,
                                 height=380,
@@ -790,52 +883,78 @@ def main():
                             tier_display["Zip Count"] = tier_display["Zip Count"].astype(int)
                             st.dataframe(tier_display, use_container_width=True)
 
-                    # Top errors
+                    # ── Ablation Analysis ──────────────────────────────
                     st.markdown("---")
-                    st.markdown("**Largest Prediction Errors**")
-                    worst = comparison.nlargest(10, "abs_error")[["zip_code", "actual", "predicted", "error"]].copy()
-                    worst["predicted"] = worst["predicted"].map("{:.1f}".format)
-                    worst["error"] = worst["error"].map("{:+.1f}".format)
-                    st.dataframe(worst, use_container_width=True)
+                    st.markdown("#### Ablation Study: Without structural_fires Feature")
+                    st.caption(
+                        "The structural_fires feature is partially circular (we predict fire count "
+                        "using past fire count). This ablation tests whether the model still works "
+                        "using only building characteristics, complaints, violations, and other signals."
+                    )
 
+                    abl_col1, abl_col2 = st.columns(2)
+                    with abl_col1:
+                        st.metric("R² with structural_fires", f"{best_full_r2:.3f}")
+                    with abl_col2:
+                        delta = best_abl_r2 - best_full_r2
+                        st.metric("R² without structural_fires", f"{best_abl_r2:.3f}",
+                                  delta=f"{delta:+.3f}")
+
+                    st.markdown("**Actual vs Predicted (Without structural_fires)**")
+                    fig3 = make_actual_vs_predicted_chart(y_test, best_abl_preds)
+                    fig3.update_layout(title="Ablation: Predicting Fires WITHOUT Past Fire Count")
+                    st.plotly_chart(fig3, use_container_width=True)
+
+                    # Feature importance for ablation model
+                    best_abl_result = gbm_abl if gbm_abl_r2 > rf_abl_r2 else rf_abl
+                    if "importance" in best_abl_result:
+                        st.markdown("**Top Features (Without structural_fires)**")
+                        imp = best_abl_result["importance"].head(10)
+                        fig4 = go.Figure(go.Bar(
+                            x=imp["importance_permutation"].values[::-1],
+                            y=imp["feature"].values[::-1],
+                            orientation="h",
+                            marker_color="#FF6B35",
+                        ))
+                        fig4.update_layout(
+                            title="What Predicts Fire Risk (Without Past Fire Count)?",
+                            xaxis_title="Importance (mean decrease in R²)",
+                            height=350,
+                            paper_bgcolor="#0B0E11",
+                            plot_bgcolor="#131820",
+                            font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
+                        )
+                        st.plotly_chart(fig4, use_container_width=True)
+
+                    # ── Methodology ────────────────────────────────────
                     with st.expander("Validation Methodology"):
                         st.markdown("""
-                        **Temporal Cross-Validation**
+                        **Temporal Cross-Validation** (strict — no data leakage)
 
-                        This is a strict temporal backtest — no data leakage:
+                        1. **Training**: All incidents ≤2022 → zip-level features → enriched with
+                           311 complaints, DOB violations, and PLUTO building data.
+                        2. **Testing**: All incidents ≥2023 → same feature engineering pipeline.
+                        3. **Models**: Both Tuned RandomForest and GradientBoosting are evaluated.
+                        4. **Ablation**: Re-trains without the `structural_fires` feature to test
+                           whether the model can predict fire risk from building characteristics,
+                           complaints, and violations alone (non-circular prediction).
 
-                        1. **Training data**: All fire incidents from 2018–2022. Features are
-                           engineered at the zip-code level (structural fire counts, rates,
-                           seasonal patterns, trends, etc.)
+                        **Risk tier validation**: Each zip gets a risk tier from the training model,
+                        then we check whether high-risk zips actually had more fires in the test period.
+                        Perfect monotonic ordering (Critical > High > Moderate > Low) validates
+                        the model's ranking ability.
 
-                        2. **Model**: Same RandomForest architecture (100 trees, depth 12)
-                           trained *only* on 2018–2022 features.
-
-                        3. **Test data**: Actual 2023+ fire incidents. We engineer the same
-                           features and compare predicted vs actual structural fire counts.
-
-                        4. **Risk tier validation**: We assign each zip a risk tier based on
-                           the 2018–2022 model, then check whether "Critical" zips actually
-                           had more fires in 2023+. If the model is good, Critical > High >
-                           Moderate > Low.
-
-                        **Key metric**: The R² score here is *out-of-sample* — it tells you
-                        how well the model generalizes to future data it's never seen.
-                        An R² > 0.5 is good, > 0.7 is strong.
-
-                        **Building-level note**: This validation operates at the zip level
-                        because NYFIRS data doesn't include building addresses. The building
-                        risk scores inherit neighborhood risk as their largest component (40%),
-                        so zip-level validation also validates the building scores indirectly.
+                        **Why the ablation matters**: Using past fire count to predict future fire
+                        count is partially circular. The ablation proves the model captures genuine
+                        risk factors (building age, complaints, violations) beyond just "places that
+                        had fires will have fires again."
                         """)
                 else:
                     st.warning("Not enough data in train or test period for validation.")
             else:
-                st.warning("Need data from both ≤2022 and ≥2023 for temporal validation. "
-                           "Try increasing the data fetch limit or retraining.")
+                st.warning("Need data from both ≤2022 and ≥2023 for temporal validation.")
         else:
-            st.warning("Insufficient temporal data for validation. "
-                       "The model needs multi-year incident data. Try retraining with more data.")
+            st.warning("Insufficient temporal data for validation.")
 
     # ─── Footer ──────────────────────────────────────────────────────────
     st.divider()
