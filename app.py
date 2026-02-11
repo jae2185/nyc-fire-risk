@@ -1605,7 +1605,8 @@ def main():
                     with val_col2:
                         st.markdown("**Risk Tier Validation**")
                         st.caption("Do zip codes flagged as high-risk actually have more fires later?")
-                        tier_thresholds = [0.75, 0.50, 0.25]
+                        try:
+                            tier_thresholds = [0.75, 0.50, 0.25]
                         tier_labels_map = ["Critical", "High", "Moderate", "Low"]
                         pred_scores = best_full_preds / (best_full_preds.max() + 1e-9)
                         tiers = pd.cut(pred_scores, bins=[-0.01, 0.25, 0.50, 0.75, 1.01], labels=["Low", "Moderate", "High", "Critical"])
@@ -1638,6 +1639,8 @@ def main():
                         st.markdown("**Tier Breakdown**")
                         tier_display = tier_summary.reset_index()
                         st.dataframe(tier_display, width="stretch")
+                        except Exception as e:
+                            st.warning(f"Tier chart error: {e}")
 
                     # ── Rolling CV from cache ──
                     if roll_cache.exists():
