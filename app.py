@@ -1605,7 +1605,6 @@ def main():
                     with val_col2:
                         st.markdown("**Risk Tier Validation**")
                         st.caption("Do zip codes flagged as high-risk actually have more fires later?")
-                        test_zip_features = engineer_features_by_zip(test_features) if "structural_fires" not in test_features.columns else test_features
                         tier_thresholds = [0.75, 0.50, 0.25]
                         tier_labels_map = ["Critical", "High", "Moderate", "Low"]
                         pred_scores = best_full_preds / (best_full_preds.max() + 1e-9)
