@@ -79,6 +79,9 @@ CACHE_MAX_AGE_HOURS = 24  # Retrain after this many hours
 
 def _cache_is_fresh():
     """Check if the disk cache exists and is recent enough."""
+    slim_cache = Path(__file__).parent / "data" / "model_cache_slim.pkl"
+    if slim_cache.exists() and not CACHE_FILE.exists():
+        return True  # Slim cache is always fresh (pre-built for deployment)
     if not CACHE_FILE.exists():
         return False
     import time
@@ -94,7 +97,11 @@ def _save_cache(data):
 
 
 def _load_cache():
-    """Load model results from disk."""
+    """Load model results from disk. Tries slim cache first (for cloud deployment)."""
+    slim_cache = Path(__file__).parent / "data" / "model_cache_slim.pkl"
+    if slim_cache.exists() and not CACHE_FILE.exists():
+        with open(slim_cache, "rb") as f:
+            return pickle.load(f)
     with open(CACHE_FILE, "rb") as f:
         return pickle.load(f)
 
@@ -744,9 +751,9 @@ def main():
             "Also tests whether the model works without the circular structural_fires feature."
         )
 
-        raw_df = data["raw_df"]
+        raw_df = data.get("raw_df", None)
 
-        if "year" in raw_df.columns and raw_df["year"].nunique() > 2:
+        if raw_df is not None and "year" in raw_df.columns and raw_df["year"].nunique() > 2:
             train_years = raw_df[raw_df["year"] <= 2022]
             test_years = raw_df[raw_df["year"] >= 2023]
 
