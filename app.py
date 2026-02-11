@@ -9,6 +9,7 @@ PUMA, and borough granularity.
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 
 from data.fetch_data import FireDataPipeline
 from data.feature_engineering import (
