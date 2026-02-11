@@ -744,6 +744,14 @@ def main():
                         with open(demo_cache, "rb") as f:
                             st.session_state[data_key] = pickle.load(f)
                         st.toast("Loaded cached validation data from disk")
+                        _vc = st.session_state[data_key]
+                        train_features = _vc["train_features"]
+                        test_features = _vc["test_features"]
+                        X_train_full = _vc["X_train_full"]
+                        X_test_full = _vc["X_test_full"]
+                        y_train = _vc["y_train"]
+                        y_test = _vc["y_test"]
+                        fn_full = _vc["fn_full"]
                     else:
                         with st.spinner("Fetching & engineering features (cached after first run)..."):
                             train_features = engineer_features_by_zip(train_years)
