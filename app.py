@@ -763,7 +763,6 @@ def main():
                 from data.enrichment import enrich_zip_features
                 from models.enhanced_model import get_enhanced_feature_matrix, train_tuned_rf, train_xgboost
                 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-                import plotly.graph_objects as go
 
                 # Engineer + enrich features for BOTH periods
                 # ── Layer 1: Data cache (slow — API calls, feature engineering) ──
