@@ -110,35 +110,47 @@ class FireDataPipeline:
     def fetch_fire_incidents(_self, limit: int = 200000) -> pd.DataFrame:
         """
         Fetch fire incident data from the SODA API.
-        Falls back to synthetic data if the API is unavailable.
+        Samples across multiple years for representative coverage.
         """
         all_records = []
         batch_size = 10000
-        offsets = range(0, limit, batch_size)
+        years = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+        per_year_limit = limit // len(years)
 
-        for offset in offsets:
-            url = (
-                f"{ENDPOINTS['fire_incidents']['base']}"
-                f"?$limit={batch_size}&$offset={offset}"
-                f"&$order=incident_date_time ASC"
-            )
-            try:
-                resp = requests.get(url, timeout=30)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if not data:
+        for year in years:
+            offset = 0
+            year_records = 0
+            while year_records < per_year_limit:
+                fetch_size = min(batch_size, per_year_limit - year_records)
+                url = ENDPOINTS['fire_incidents']['base']
+                params = {
+                    '$limit': fetch_size,
+                    '$offset': offset,
+                    '$where': f"incident_date_time >= '{year}-01-01T00:00:00' AND incident_date_time < '{year + 1}-01-01T00:00:00'",
+                    '$order': 'incident_date_time',
+                }
+                try:
+                    resp = requests.get(url, params=params, timeout=30)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if not data:
+                            break
+                        all_records.extend(data)
+                        year_records += len(data)
+                        offset += fetch_size
+                        if len(data) < fetch_size:
+                            break
+                    else:
                         break
-                    all_records.extend(data)
-                else:
+                except Exception as e:
+                    print(f'API error year {year} offset {offset}: {e}')
                     break
-            except Exception as e:
-                print(f"API request failed at offset {offset}: {e}")
-                break
-            time.sleep(0.25)  # Be polite to the API
+                time.sleep(0.2)
+            print(f'[FETCH] Year {year}: {year_records} records')
 
         if all_records:
-            df = pd.DataFrame(all_records)
-            return df
+            print(f'[FETCH] Total: {len(all_records)} records across {len(years)} years')
+            return pd.DataFrame(all_records)
         else:
             return _self._generate_synthetic_data()
 

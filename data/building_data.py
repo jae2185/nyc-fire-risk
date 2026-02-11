@@ -286,24 +286,29 @@ def score_buildings_with_neighborhood(buildings_df, zip_features_df):
     df["building_vulnerability"] = sum(vuln_components)
     df["building_vulnerability"] = df["building_vulnerability"].clip(0, 1)
 
-    # Composite risk score
-    df["risk_score"] = (
+    # Composite risk score (raw)
+    raw_score = (
         0.40 * df["neighborhood_risk"] +
         0.35 * df["building_vulnerability"] +
-        0.25 * df["neighborhood_fire_rate"].clip(0, 1) * 3  # Scale up fire rate
+        0.25 * df["neighborhood_fire_rate"].clip(0, 1) * 3
     ).clip(0, 1)
 
-    # Normalize to 0–1 range using quantiles for better spread
-    if len(df) > 10:
-        from sklearn.preprocessing import QuantileTransformer
-        qt = QuantileTransformer(output_distribution="uniform", random_state=42)
-        df["risk_score"] = qt.fit_transform(df[["risk_score"]]).flatten()
-
-    # Risk labels
+    # Apply nonlinear transformation to create realistic skewed distribution
+    # Most buildings should be low/moderate risk, few should be critical
+    # Using a power transform: raises the bar for high scores
+    df["risk_score"] = np.power(raw_score, 0.7)  # Compress toward lower end
+    
+    # Min-max normalize within the batch to use full 0-1 range
+    rmin = df["risk_score"].min()
+    rmax = df["risk_score"].max()
+    if rmax > rmin:
+        df["risk_score"] = (df["risk_score"] - rmin) / (rmax - rmin)
+    
+    # Risk labels with skewed thresholds (fewer critical, more low)
     def _label(r):
-        if r >= 0.75: return "Critical"
-        if r >= 0.50: return "High"
-        if r >= 0.25: return "Moderate"
+        if r >= 0.85: return "Critical"
+        if r >= 0.65: return "High"
+        if r >= 0.35: return "Moderate"
         return "Low"
 
     df["risk_label"] = df["risk_score"].map(_label)
