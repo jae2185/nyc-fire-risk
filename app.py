@@ -737,26 +737,37 @@ def main():
                 # Engineer + enrich features for BOTH periods
                 # ── Layer 1: Data cache (slow — API calls, feature engineering) ──
                 data_key = "val_data_cache"
+                demo_cache = Path("data/validation_cache.pkl")
                 if data_key not in st.session_state:
-                    with st.spinner("Fetching & engineering features (cached after first run)..."):
-                        train_features = engineer_features_by_zip(train_years)
-                        test_features = engineer_features_by_zip(test_years)
-                        try:
-                            train_features = enrich_zip_features(train_features)
-                            test_features = enrich_zip_features(test_features)
-                        except Exception as e:
-                            st.warning(f"Enrichment failed for validation: {e}")
-                        X_train_full, y_train, fn_full = get_enhanced_feature_matrix(train_features)
-                        X_test_full, y_test, _ = get_enhanced_feature_matrix(test_features)
-                        st.session_state[data_key] = {
-                            "train_features": train_features,
-                            "test_features": test_features,
-                            "X_train_full": X_train_full,
-                            "X_test_full": X_test_full,
-                            "y_train": y_train,
-                            "y_test": y_test,
-                            "fn_full": fn_full,
-                        }
+                    if demo_cache.exists():
+                        import pickle
+                        with open(demo_cache, "rb") as f:
+                            st.session_state[data_key] = pickle.load(f)
+                        st.toast("Loaded cached validation data from disk")
+                    else:
+                        with st.spinner("Fetching & engineering features (cached after first run)..."):
+                            train_features = engineer_features_by_zip(train_years)
+                            test_features = engineer_features_by_zip(test_years)
+                            try:
+                                train_features = enrich_zip_features(train_features)
+                                test_features = enrich_zip_features(test_features)
+                            except Exception as e:
+                                st.warning(f"Enrichment failed for validation: {e}")
+                            X_train_full, y_train, fn_full = get_enhanced_feature_matrix(train_features)
+                            X_test_full, y_test, _ = get_enhanced_feature_matrix(test_features)
+                            st.session_state[data_key] = {
+                                "train_features": train_features,
+                                "test_features": test_features,
+                                "X_train_full": X_train_full,
+                                "X_test_full": X_test_full,
+                                "y_train": y_train,
+                                "y_test": y_test,
+                                "fn_full": fn_full,
+                            }
+                            # Save to disk for future demo mode
+                            import pickle
+                            with open(demo_cache, "wb") as f:
+                                pickle.dump(st.session_state[data_key], f)
                 else:
                     _vc = st.session_state[data_key]
                     train_features = _vc["train_features"]
@@ -790,26 +801,11 @@ def main():
                     X_train_abl = X_train_full[:, ablation_idx]
                     X_test_abl = X_test_full[:, ablation_idx]
 
-                    rf_abl = train_tuned_rf(X_train_abl, y_train, ablation_cols)
-                    gbm_abl = train_xgboost(X_train_abl, y_train, ablation_cols)
-
-                    rf_preds_abl = rf_abl["model"].predict(X_test_abl)
-                    gbm_preds_abl = gbm_abl["model"].predict(X_test_abl)
-
-                    rf_abl_r2 = r2_score(y_test, rf_preds_abl)
-                    gbm_abl_r2 = r2_score(y_test, gbm_preds_abl)
-                    rf_abl_mae = mean_absolute_error(y_test, rf_preds_abl)
-                    gbm_abl_mae = mean_absolute_error(y_test, gbm_preds_abl)
-
-                    # ── Pick best for display ──────────────────────────
+                    # ── Pick best full model for display ──────────────
                     best_full_preds = gbm_preds_full if gbm_oos_r2 > rf_oos_r2 else rf_preds_full
                     best_full_r2 = max(gbm_oos_r2, rf_oos_r2)
                     best_full_mae = gbm_oos_mae if gbm_oos_r2 > rf_oos_r2 else rf_oos_mae
                     best_full_name = gbm_full["model_name"] if gbm_oos_r2 > rf_oos_r2 else rf_full["model_name"]
-
-                    best_abl_preds = gbm_preds_abl if gbm_abl_r2 > rf_abl_r2 else rf_preds_abl
-                    best_abl_r2 = max(gbm_abl_r2, rf_abl_r2)
-                    best_abl_mae = gbm_abl_mae if gbm_abl_r2 > rf_abl_r2 else rf_abl_mae
 
                     # ── Metrics ────────────────────────────────────────
                     st.markdown("#### Out-of-Sample Performance")
@@ -958,12 +954,13 @@ def main():
                         f"and complaint features \u2014 zero fire incident data."
                     )
 
-                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
                     mc1.metric("Accuracy", f"{best_acc:.1%}")
                     if best_auc is not None:
                         mc2.metric("AUC", f"{best_auc:.3f}")
                     mc3.metric("Precision", f"{best_prec:.1%}")
                     mc4.metric("Recall", f"{best_rec:.1%}")
+                    mc5.metric("Threshold", f"{optimal_threshold:.2f}")
 
                     cls_col1, cls_col2 = st.columns(2)
 
