@@ -27,6 +27,11 @@ from utils.visualization import (
     make_monthly_chart,
     create_folium_map,
 )
+from data.building_data import (
+    fetch_pluto_buildings,
+    process_pluto_buildings,
+    score_buildings_with_neighborhood,
+)
 
 # ─── Page Config ─────────────────────────────────────────────────────────
 st.set_page_config(
@@ -35,6 +40,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ─── Session State ───────────────────────────────────────────────────────
+if "selected_zone" not in st.session_state:
+    st.session_state.selected_zone = None
 
 # ─── Custom CSS ──────────────────────────────────────────────────────────
 st.markdown("""
@@ -51,10 +60,58 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ─── Data Loading & Model Training (cached) ─────────────────────────────
-@st.cache_data(show_spinner=False)
-def load_and_train():
-    """Full pipeline: fetch data, engineer features, train model."""
+# ─── Data Loading & Model Training (with disk cache) ────────────────────
+import pickle
+import os
+from pathlib import Path
+
+CACHE_DIR = Path(__file__).parent / ".cache"
+CACHE_FILE = CACHE_DIR / "model_cache.pkl"
+CACHE_MAX_AGE_HOURS = 24  # Retrain after this many hours
+
+
+def _cache_is_fresh():
+    """Check if the disk cache exists and is recent enough."""
+    if not CACHE_FILE.exists():
+        return False
+    import time
+    age_hours = (time.time() - CACHE_FILE.stat().st_mtime) / 3600
+    return age_hours < CACHE_MAX_AGE_HOURS
+
+
+def _save_cache(data):
+    """Save model results to disk."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    with open(CACHE_FILE, "wb") as f:
+        pickle.dump(data, f)
+
+
+def _load_cache():
+    """Load model results from disk."""
+    with open(CACHE_FILE, "rb") as f:
+        return pickle.load(f)
+
+
+@st.cache_resource(show_spinner=False)
+def load_and_train(force_retrain=False):
+    """
+    Full pipeline: fetch data, engineer features, train model.
+
+    Results are cached to disk so the model doesn't retrain on every
+    app restart. Cache expires after CACHE_MAX_AGE_HOURS hours.
+    Pass force_retrain=True to ignore the cache.
+    """
+    # Try loading from disk cache first
+    if not force_retrain and _cache_is_fresh():
+        try:
+            cached = _load_cache()
+            # Verify it has the expected keys
+            if all(k in cached for k in ["zip_features", "model", "results"]):
+                return cached
+        except Exception:
+            pass  # Cache corrupted, retrain
+
+    # Full pipeline
     pipeline = FireDataPipeline()
     df = pipeline.fetch_and_process(limit=50000)
 
@@ -92,7 +149,7 @@ def load_and_train():
     boro_features["risk_label"] = boro_features["risk_score"].map(risk_label)
     boro_features["predicted_fires"] = boro_features["structural_fires"]
 
-    return {
+    data = {
         "raw_df": df,
         "zip_features": zip_features,
         "puma_features": puma_features,
@@ -102,6 +159,11 @@ def load_and_train():
         "X": X, "y": y,
         "zip_risk": zip_risk,
     }
+
+    # Save to disk
+    _save_cache(data)
+
+    return data
 
 
 # ─── Main App ────────────────────────────────────────────────────────────
@@ -129,6 +191,14 @@ def main():
             'scikit-learn + SHAP</div>',
             unsafe_allow_html=True,
         )
+
+        st.divider()
+        if st.button("🔄 Retrain Model", use_container_width=True,
+                      help="Force re-fetch data and retrain. Use if data is stale."):
+            if CACHE_FILE.exists():
+                CACHE_FILE.unlink()
+            st.cache_resource.clear()
+            st.rerun()
 
     # Load data
     with st.spinner("Fetching FDNY data & training model..."):
@@ -165,13 +235,27 @@ def main():
     c4.metric("Model R²", f"{results['train']['r2']:.3f}")
 
     # ─── Tabs ────────────────────────────────────────────────────────────
-    tab_map, tab_rankings, tab_model, tab_explorer = st.tabs(
-        ["🗺️ Risk Map", "📊 Rankings", "🧠 Model", "🔍 Explorer"]
+    tab_map, tab_rankings, tab_model, tab_explorer, tab_buildings = st.tabs(
+        ["🗺️ Risk Map", "📊 Rankings", "🧠 Model", "🔍 Explorer", "🏢 Buildings"]
     )
 
     # ── TAB: Map ─────────────────────────────────────────────────────────
     with tab_map:
         col_map, col_side = st.columns([3, 1])
+
+        # Determine map center/zoom from selected zone
+        selected = st.session_state.selected_zone
+        map_center = None
+        map_zoom = 11 if granularity == "Zip Code" else (11 if granularity == "PUMA" else 10)
+
+        if selected is not None:
+            sel_row = active_df[active_df[label_col] == selected]
+            if not sel_row.empty:
+                lat = sel_row.iloc[0].get("latitude")
+                lng = sel_row.iloc[0].get("longitude")
+                if pd.notna(lat) and pd.notna(lng):
+                    map_center = [lat, lng]
+                    map_zoom = 14 if granularity == "Zip Code" else (13 if granularity == "PUMA" else 11)
 
         with col_map:
             try:
@@ -180,7 +264,9 @@ def main():
                     active_df.reset_index(drop=True),
                     active_df["risk_score"].values,
                     label_col,
-                    zoom=11 if granularity == "Zip Code" else (11 if granularity == "PUMA" else 10),
+                    center=map_center,
+                    zoom=map_zoom,
+                    highlight_zone=selected,
                 )
                 st_folium(fmap, width=None, height=520, returned_objects=[])
             except ImportError:
@@ -192,20 +278,52 @@ def main():
                 )
 
         with col_side:
-            st.markdown("**Highest Risk**")
-            top5 = active_df.nlargest(5, "risk_score")
-            for _, row in top5.iterrows():
-                rl = row["risk_label"].lower()
-                st.markdown(
-                    f'<div style="padding:8px 0;border-bottom:1px solid #2A354822">'
-                    f'<b>{row[label_col]}</b><br>'
-                    f'<span class="risk-{rl}">{row["risk_label"]}</span> '
-                    f'<span style="color:#7B8DA4;font-size:11px">'
-                    f'{int(row["structural_fires"])} fires</span></div>',
-                    unsafe_allow_html=True,
-                )
+            st.markdown("**Highest Risk** *(click to focus)*")
+            top_zones = active_df.nlargest(8, "risk_score")
+            for _, row in top_zones.iterrows():
+                zone_id = row[label_col]
+                rl = row["risk_label"]
+                fires = int(row["structural_fires"])
+                is_selected = (zone_id == selected)
+                icon = "→ " if is_selected else ""
+
+                if st.button(
+                    f"{icon}{zone_id}  ·  {rl}  ·  {fires} fires",
+                    key=f"risk_btn_{zone_id}",
+                    use_container_width=True,
+                ):
+                    # Toggle: click again to deselect
+                    st.session_state.selected_zone = zone_id if zone_id != selected else None
+                    st.rerun()
+
+            # Clear selection
+            if selected is not None:
+                if st.button("✕ Clear selection", key="clear_sel", use_container_width=True):
+                    st.session_state.selected_zone = None
+                    st.rerun()
 
             st.markdown("---")
+
+            # Detail card for selected zone
+            if selected is not None:
+                sel_data = active_df[active_df[label_col] == selected]
+                if not sel_data.empty:
+                    s = sel_data.iloc[0]
+                    rl = s["risk_label"].lower()
+                    st.markdown(
+                        f'<div style="background:#131820;border:1px solid #2A3548;'
+                        f'border-radius:8px;padding:12px;margin-bottom:12px">'
+                        f'<div style="font-size:16px;font-weight:700">{selected}</div>'
+                        f'<span class="risk-{rl}">{s["risk_label"]} Risk '
+                        f'({s["risk_score"]:.2f})</span><br>'
+                        f'<span style="color:#7B8DA4;font-size:11px">'
+                        f'{int(s["structural_fires"])} structural fires · '
+                        f'{int(s["total_incidents"])} total incidents · '
+                        f'Fire rate: {s["structural_fire_rate"]:.1%}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
             # Citywide monthly
             month_cols = [f"month_{m}" for m in range(1, 13)]
             existing = [c for c in month_cols if c in active_df.columns]
@@ -226,17 +344,11 @@ def main():
         ]
         display_cols = [c for c in display_cols if c in ranked.columns]
 
-        st.dataframe(
-            ranked[display_cols].style.format({
-                "structural_fire_rate": "{:.1%}",
-                "risk_score": "{:.3f}",
-                "predicted_fires": "{:.0f}",
-            }).background_gradient(
-                subset=["risk_score"], cmap="YlOrRd"
-            ),
-            use_container_width=True,
-            height=500,
-        )
+        display_df = ranked[display_cols].copy()
+        display_df["structural_fire_rate"] = display_df["structural_fire_rate"].map("{:.1%}".format)
+        display_df["risk_score"] = display_df["risk_score"].map("{:.3f}".format)
+        display_df["predicted_fires"] = display_df["predicted_fires"].map("{:.0f}".format)
+        st.dataframe(display_df, use_container_width=True, height=500)
 
         # Borough comparison
         if granularity != "Borough":
@@ -312,10 +424,10 @@ def main():
         st.markdown("### Zone Deep Dive")
 
         zone_options = active_df[label_col].tolist()
-        selected = st.selectbox(f"Select {granularity}", zone_options)
+        selected_explorer = st.selectbox(f"Select {granularity}", zone_options)
 
-        if selected:
-            row = active_df[active_df[label_col] == selected].iloc[0]
+        if selected_explorer:
+            row = active_df[active_df[label_col] == selected_explorer].iloc[0]
 
             col_e1, col_e2 = st.columns([1, 2])
 
@@ -323,7 +435,7 @@ def main():
                 rl = row["risk_label"].lower()
                 st.markdown(
                     f'<div style="text-align:center;padding:20px">'
-                    f'<div style="font-size:28px;font-weight:700">{selected}</div>'
+                    f'<div style="font-size:28px;font-weight:700">{selected_explorer}</div>'
                     f'<div style="margin-top:8px">'
                     f'<span class="risk-{rl}" style="font-size:14px;padding:6px 16px">'
                     f'{row["risk_label"]} Risk ({row["risk_score"]:.2f})</span></div>'
@@ -352,7 +464,7 @@ def main():
                 existing = [c for c in month_cols if c in row.index]
                 if existing:
                     monthly_vals = [row[c] for c in existing]
-                    fig = make_monthly_chart(monthly_vals, f"Monthly Distribution — {selected}")
+                    fig = make_monthly_chart(monthly_vals, f"Monthly Distribution — {selected_explorer}")
                     st.plotly_chart(fig, use_container_width=True)
 
                 # Show constituent zips for PUMA view
@@ -361,20 +473,205 @@ def main():
                     constituent_zips = zip_features[zip_features["puma_code"] == puma_code]
                     if not constituent_zips.empty:
                         st.markdown(f"**Constituent Zip Codes** ({len(constituent_zips)})")
-                        st.dataframe(
-                            constituent_zips[["zip_code", "structural_fires", "risk_score", "risk_label"]]
-                            .sort_values("risk_score", ascending=False)
-                            .style.format({"risk_score": "{:.3f}"})
-                            .background_gradient(subset=["risk_score"], cmap="YlOrRd"),
-                            use_container_width=True,
-                            height=250,
+                        cz = constituent_zips[["zip_code", "structural_fires", "risk_score", "risk_label"]].sort_values("risk_score", ascending=False).copy()
+                        cz["risk_score"] = cz["risk_score"].map("{:.3f}".format)
+                        st.dataframe(cz, use_container_width=True, height=250)
+
+    # ── TAB: Buildings ───────────────────────────────────────────────────
+    with tab_buildings:
+        st.markdown("### 🏢 Building-Level Risk Explorer")
+        st.caption(
+            "Pulls building data from NYC PLUTO (870K+ tax lots) and scores each building "
+            "using physical characteristics + neighborhood fire history."
+        )
+
+        bldg_col1, bldg_col2 = st.columns([1, 1])
+        with bldg_col1:
+            bldg_search_mode = st.radio(
+                "Search by",
+                ["Zip Code", "Borough"],
+                horizontal=True,
+                key="bldg_search_mode",
+            )
+        with bldg_col2:
+            if bldg_search_mode == "Zip Code":
+                available_zips = sorted(zip_features["zip_code"].tolist())
+                bldg_zip = st.selectbox("Select Zip Code", available_zips, key="bldg_zip")
+                bldg_borough = None
+            else:
+                bldg_borough = st.selectbox(
+                    "Select Borough",
+                    ["Manhattan", "Bronx", "Brooklyn", "Queens", "Staten Island"],
+                    key="bldg_boro",
+                )
+                bldg_zip = None
+
+        bldg_limit = st.slider(
+            "Max buildings to load",
+            min_value=100, max_value=10000, value=2000, step=500,
+            help="Higher = more comprehensive but slower to load",
+            key="bldg_limit",
+        )
+
+        if st.button("🔍 Load & Score Buildings", key="load_buildings", use_container_width=True):
+            with st.spinner("Fetching building data from PLUTO API..."):
+                raw_buildings = fetch_pluto_buildings(
+                    zip_code=bldg_zip,
+                    borough=bldg_borough,
+                    limit=bldg_limit,
+                )
+
+            if raw_buildings.empty:
+                st.warning("No building data returned. Try a different search.")
+            else:
+                with st.spinner(f"Processing {len(raw_buildings)} buildings..."):
+                    buildings = process_pluto_buildings(raw_buildings)
+
+                with st.spinner("Scoring buildings with neighborhood risk..."):
+                    scored = score_buildings_with_neighborhood(buildings, zip_features)
+
+                st.session_state["scored_buildings"] = scored
+                st.success(f"Scored {len(scored)} buildings.")
+
+        # Display results if we have them
+        if "scored_buildings" in st.session_state:
+            scored = st.session_state["scored_buildings"]
+
+            # Summary metrics
+            bc1, bc2, bc3, bc4 = st.columns(4)
+            bc1.metric("Buildings Scored", f"{len(scored):,}")
+            bc2.metric("Critical Risk", len(scored[scored["risk_score"] >= 0.75]))
+            bc3.metric("Avg Building Age", f"{scored['building_age'].mean():.0f} yrs")
+            bc4.metric("Pre-1968 Code", f"{scored['is_pre_code'].mean():.0%}")
+
+            st.markdown("---")
+
+            # Map + Table layout
+            bldg_map_col, bldg_info_col = st.columns([3, 2])
+
+            with bldg_map_col:
+                st.markdown("**Building Risk Map**")
+                try:
+                    from streamlit_folium import st_folium
+                    import folium
+                    from branca.colormap import LinearColormap
+
+                    center_lat = scored["latitude"].mean()
+                    center_lng = scored["longitude"].mean()
+                    bldg_map = folium.Map(
+                        location=[center_lat, center_lng],
+                        zoom_start=14,
+                        tiles="CartoDB dark_matter",
+                    )
+
+                    colormap = LinearColormap(
+                        colors=["#2ECC71", "#FF6B35", "#FFAA2B", "#FF3B4E"],
+                        vmin=0, vmax=1,
+                        caption="Building Fire Risk",
+                    )
+
+                    # Sample if too many for performance
+                    display_df = scored if len(scored) <= 2000 else scored.sample(2000, random_state=42)
+
+                    for _, bldg in display_df.iterrows():
+                        lat = bldg.get("latitude", 0)
+                        lng = bldg.get("longitude", 0)
+                        if lat == 0 or lng == 0:
+                            continue
+
+                        risk = bldg["risk_score"]
+                        rc = risk_color(risk)
+                        radius = 3 + risk * 8
+
+                        popup_html = (
+                            f'<div style="font-family:monospace;font-size:11px;min-width:180px">'
+                            f'<b>{bldg.get("address", "N/A")}</b><br>'
+                            f'BBL: {bldg.get("bbl", "N/A")}<br>'
+                            f'Risk: <span style="color:{rc}">{bldg["risk_label"]} ({risk:.2f})</span><br>'
+                            f'Built: {int(bldg["yearbuilt"])} ({int(bldg["building_age"])} yrs)<br>'
+                            f'Floors: {int(bldg["numfloors"])} · Units: {int(bldg["unitsres"])}<br>'
+                            f'Area: {int(bldg["bldgarea"]):,} sqft<br>'
+                            f'Class: {bldg.get("bldgclass", "N/A")}'
+                            f'</div>'
+                        )
+
+                        folium.CircleMarker(
+                            location=[lat, lng],
+                            radius=radius,
+                            color=rc,
+                            fill=True,
+                            fill_color=rc,
+                            fill_opacity=0.6,
+                            popup=folium.Popup(popup_html, max_width=250),
+                            tooltip=f'{bldg.get("address", "N/A")} — {bldg["risk_label"]}',
+                        ).add_to(bldg_map)
+
+                    colormap.add_to(bldg_map)
+                    st_folium(bldg_map, width=None, height=450, returned_objects=[])
+
+                except ImportError:
+                    st.info("Install `streamlit-folium` for map view.")
+
+            with bldg_info_col:
+                st.markdown("**Highest Risk Buildings**")
+                top_bldgs = scored.nlargest(15, "risk_score")
+                display_bldg_cols = ["address", "risk_label", "risk_score", "yearbuilt",
+                                      "numfloors", "unitsres", "bldgclass"]
+                display_bldg_cols = [c for c in display_bldg_cols if c in top_bldgs.columns]
+                top_display = top_bldgs[display_bldg_cols].copy()
+                top_display["risk_score"] = top_display["risk_score"].map("{:.3f}".format)
+                top_display["yearbuilt"] = top_display["yearbuilt"].astype(int)
+                st.dataframe(top_display, use_container_width=True, height=350)
+
+                # Risk breakdown
+                st.markdown("**Risk Distribution**")
+                risk_counts = scored["risk_label"].value_counts()
+                for label in ["Critical", "High", "Moderate", "Low"]:
+                    count = risk_counts.get(label, 0)
+                    pct = count / len(scored) * 100
+                    color = {"Critical": "#FF3B4E", "High": "#FFAA2B",
+                             "Moderate": "#FF6B35", "Low": "#2ECC71"}[label]
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;padding:4px 0">'
+                        f'<span style="color:{color};font-weight:600">{label}</span>'
+                        f'<span style="color:#7B8DA4">{count:,} ({pct:.1f}%)</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # Building search
+            st.markdown("---")
+            st.markdown("**Search Building by Address**")
+            addr_search = st.text_input("Enter address (partial match)", key="addr_search")
+            if addr_search and len(addr_search) >= 3:
+                matches = scored[scored["address"].str.contains(addr_search.upper(), na=False)]
+                if matches.empty:
+                    st.info("No matches found.")
+                else:
+                    st.write(f"Found {len(matches)} match(es):")
+                    for _, bldg in matches.head(5).iterrows():
+                        rl = bldg["risk_label"].lower()
+                        st.markdown(
+                            f'<div style="background:#131820;border:1px solid #2A3548;'
+                            f'border-radius:8px;padding:12px;margin-bottom:8px">'
+                            f'<b>{bldg.get("address", "N/A")}</b> '
+                            f'<span class="risk-{rl}">{bldg["risk_label"]}</span><br>'
+                            f'<span style="color:#7B8DA4;font-size:11px">'
+                            f'BBL: {bldg.get("bbl", "N/A")} · '
+                            f'Built {int(bldg["yearbuilt"])} ({int(bldg["building_age"])} yrs) · '
+                            f'{int(bldg["numfloors"])} floors · '
+                            f'{int(bldg["unitsres"])} units · '
+                            f'{int(bldg["bldgarea"]):,} sqft · '
+                            f'Class {bldg.get("bldgclass", "N/A")}'
+                            f'</span></div>',
+                            unsafe_allow_html=True,
                         )
 
     # ─── Footer ──────────────────────────────────────────────────────────
     st.divider()
     st.caption(
         "Data: NYC Open Data — Incidents Responded to by Fire Companies (NYFIRS) · "
-        "SODA API endpoint tm6d-hbzd · "
+        "PLUTO (Primary Land Use Tax Lot Output) · "
+        "SODA API endpoints tm6d-hbzd, 64uk-42ks · "
         "Model: scikit-learn RandomForest · "
         "Built with Streamlit"
     )
