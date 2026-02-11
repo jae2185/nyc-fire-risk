@@ -262,10 +262,10 @@ def main():
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Zones Analyzed", len(active_df))
-    c2.metric("Structural Fires", f"{int(active_df['structural_fires'].sum()):,}")
-    c3.metric("Critical Zones", len(active_df[active_df["risk_score"] >= 0.75]))
-    c4.metric("Model R²", f"{results['train']['r2']:.3f}")
+    c1.metric("Zones Analyzed", len(active_df), help="Number of geographic zones included in the analysis at the selected spatial granularity.")
+    c2.metric("Structural Fires", f"{int(active_df['structural_fires'].sum()):,}", help="Total structural fire incidents across all zones in the training period (2019-2022). Source: FDNY NYFIRS via NYC Open Data.")
+    c3.metric("Critical Zones", len(active_df[active_df["risk_score"] >= 0.75]), help="Zones with a model-predicted risk score >= 0.75 (top quartile). These areas have the highest concentration of fire risk factors.")
+    c4.metric("Model R²", f"{results['train']['r2']:.3f}", help="R-squared on training data. Measures how well the model explains variance in fire counts. 1.0 = perfect fit.")
 
     # ─── Tabs ────────────────────────────────────────────────────────────
     tab_map, tab_rankings, tab_model, tab_explorer, tab_buildings, tab_validation = st.tabs(
@@ -396,9 +396,9 @@ def main():
         with col_m1:
             st.markdown("### Performance Metrics")
             m1, m2, m3 = st.columns(3)
-            m1.metric("R² (Train)", f"{results['train']['r2']:.3f}")
-            m2.metric("RMSE", f"{results['train']['rmse']:.1f}")
-            m3.metric("MAE", f"{results['train']['mae']:.1f}")
+            m1.metric("R² (Train)", f"{results['train']['r2']:.3f}", help="Proportion of variance in fire counts explained by the model. Higher is better; 1.0 is perfect.")
+            m2.metric("RMSE", f"{results['train']['rmse']:.1f}", help="Root Mean Squared Error — average prediction error in fire counts. Lower is better. Penalizes large errors more heavily than MAE.")
+            m3.metric("MAE", f"{results['train']['mae']:.1f}", help="Mean Absolute Error — average absolute difference between predicted and actual fire counts. Lower is better.")
 
             cv = results["cv"]
             st.metric(
@@ -430,7 +430,7 @@ def main():
             for col in ["Train R²", "CV R² (mean)", "CV R² (std)", "Train RMSE", "Train MAE"]:
                 if col in mc_display.columns:
                     mc_display[col] = mc_display[col].map("{:.3f}".format)
-            st.dataframe(mc_display, use_container_width=True)
+            st.dataframe(mc_display, width="stretch")
 
             best_name = data["model_comparison"]["best"]["model_name"]
             best_cv = data["model_comparison"]["best"]["cv"]["cv_r2_mean"]
@@ -820,8 +820,8 @@ def main():
                     vc1, vc2, vc3, vc4 = st.columns(4)
                     vc1.metric("Train Period", f"{int(train_years['year'].min())}–{int(train_years['year'].max())}")
                     vc2.metric("Test Period", f"{int(test_years['year'].min())}–{int(test_years['year'].max())}")
-                    vc3.metric("R² (Out-of-Sample)", f"{best_full_r2:.3f}")
-                    vc4.metric("MAE", f"{best_full_mae:.1f} fires")
+                    vc3.metric("R² (Out-of-Sample)", f"{best_full_r2:.3f}", help="R-squared on held-out 2023-2024 data the model never saw during training. Tests whether the model generalizes to new data.")
+                    vc4.metric("MAE", f"{best_full_mae:.1f} fires", help="Mean Absolute Error on test data — on average, predictions are off by this many fires per zip code.")
 
                     # ── Model Comparison Table ─────────────────────────
                     st.markdown("---")
@@ -831,7 +831,7 @@ def main():
                         {"Model": "Tuned RF (all features)", "OOS R²": f"{rf_oos_r2:.3f}", "OOS MAE": f"{rf_oos_mae:.1f}", "CV R²": f"{rf_full['cv']['cv_r2_mean']:.3f}", "Features": len(fn_full)},
                         {"Model": "GBM (all features)", "OOS R²": f"{gbm_oos_r2:.3f}", "OOS MAE": f"{gbm_oos_mae:.1f}", "CV R²": f"{gbm_full['cv']['cv_r2_mean']:.3f}", "Features": len(fn_full)},
                     ]
-                    st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
+                    st.dataframe(pd.DataFrame(comparison_data), width="stretch")
 
                     # ── Charts ─────────────────────────────────────────
                     st.markdown("---")
@@ -841,7 +841,7 @@ def main():
                         st.markdown("**Actual vs Predicted (Best Full Model)**")
                         fig = make_actual_vs_predicted_chart(y_test, best_full_preds)
                         fig.update_layout(title=f"Out-of-Sample: {best_full_name}")
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
 
                     with val_col2:
                         st.markdown("**Risk Tier Validation**")
@@ -892,7 +892,7 @@ def main():
                                 plot_bgcolor="#131820",
                                 font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
                             )
-                            st.plotly_chart(fig2, use_container_width=True)
+                            st.plotly_chart(fig2, width="stretch")
 
                             st.markdown("**Tier Breakdown**")
                             tier_display = tier_summary.copy()
@@ -901,7 +901,7 @@ def main():
                             tier_display["Median Fires"] = tier_display["Median Fires"].map("{:.1f}".format)
                             tier_display["Total Fires"] = tier_display["Total Fires"].astype(int)
                             tier_display["Zip Count"] = tier_display["Zip Count"].astype(int)
-                            st.dataframe(tier_display, use_container_width=True)
+                            st.dataframe(tier_display, width="stretch")
 
                     # ── Classification Ablation ────────────────────────
                     st.markdown("---")
@@ -963,12 +963,12 @@ def main():
                     )
 
                     mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-                    mc1.metric("Accuracy", f"{best_acc:.1%}")
+                    mc1.metric("Accuracy", f"{best_acc:.1%}", help="Percentage of zip codes correctly classified as High Risk or Low Risk using only non-fire features.")
                     if best_auc is not None:
                         mc2.metric("AUC", f"{best_auc:.3f}")
-                    mc3.metric("Precision", f"{best_prec:.1%}")
-                    mc4.metric("Recall", f"{best_rec:.1%}")
-                    mc5.metric("Threshold", f"{optimal_threshold:.2f}")
+                    mc3.metric("Precision", f"{best_prec:.1%}", help="Of zip codes predicted as High Risk, what percentage actually were. Low precision means many false alarms.")
+                    mc4.metric("Recall", f"{best_rec:.1%}", help="Of actual High Risk zip codes, what percentage did the model catch. High recall means few missed dangers.")
+                    mc5.metric("Threshold", f"{optimal_threshold:.2f}", help="Optimal probability cutoff (via Youden\'s J statistic) for classifying High vs Low Risk. Values above this threshold are flagged High Risk.")
 
                     cls_col1, cls_col2 = st.columns(2)
 
@@ -994,7 +994,7 @@ def main():
                             plot_bgcolor="#131820",
                             font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
                         )
-                        st.plotly_chart(fig_cm, use_container_width=True)
+                        st.plotly_chart(fig_cm, width="stretch")
 
                     with cls_col2:
                         importances_cls = best_cls.feature_importances_
@@ -1018,7 +1018,7 @@ def main():
                             font=dict(color="#E8ECF1", family="JetBrains Mono, monospace"),
                             margin=dict(l=180),
                         )
-                        st.plotly_chart(fig_imp_cls, use_container_width=True)
+                        st.plotly_chart(fig_imp_cls, width="stretch")
 
                     st.info(
                         f"\U0001f4a1 **Key finding:** Without any fire history, building characteristics and demographics "
