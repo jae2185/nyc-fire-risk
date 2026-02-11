@@ -628,13 +628,35 @@ def main():
 
                         risk = bldg["risk_score"]
                         rc = risk_color(risk)
-                        radius = 3 + risk * 8
+                        label = bldg["risk_label"]
+
+                        # Visual hierarchy: Critical > High > Moderate > Low
+                        if label == "Critical":
+                            radius = 10
+                            opacity = 0.9
+                            border_color = "#FFFFFF"
+                            weight = 2
+                        elif label == "High":
+                            radius = 6
+                            opacity = 0.6
+                            border_color = rc
+                            weight = 1
+                        elif label == "Moderate":
+                            radius = 4
+                            opacity = 0.5
+                            border_color = rc
+                            weight = 1
+                        else:
+                            radius = 3
+                            opacity = 0.4
+                            border_color = rc
+                            weight = 1
 
                         popup_html = (
                             f'<div style="font-family:monospace;font-size:11px;min-width:180px">'
                             f'<b>{bldg.get("address", "N/A")}</b><br>'
                             f'BBL: {bldg.get("bbl", "N/A")}<br>'
-                            f'Risk: <span style="color:{rc}">{bldg["risk_label"]} ({risk:.2f})</span><br>'
+                            f'Risk: <span style="color:{rc}">{label} ({risk:.2f})</span><br>'
                             f'Built: {int(bldg["yearbuilt"])} ({int(bldg["building_age"])} yrs)<br>'
                             f'Floors: {int(bldg["numfloors"])} · Units: {int(bldg["unitsres"])}<br>'
                             f'Area: {int(bldg["bldgarea"]):,} sqft<br>'
@@ -645,12 +667,13 @@ def main():
                         folium.CircleMarker(
                             location=[lat, lng],
                             radius=radius,
-                            color=rc,
+                            color=border_color,
+                            weight=weight,
                             fill=True,
                             fill_color=rc,
-                            fill_opacity=0.6,
+                            fill_opacity=opacity,
                             popup=folium.Popup(popup_html, max_width=250),
-                            tooltip=f'{bldg.get("address", "N/A")} — {bldg["risk_label"]}',
+                            tooltip=f'{bldg.get("address", "N/A")} — {label}',
                         ).add_to(bldg_map)
 
                     colormap.add_to(bldg_map)
