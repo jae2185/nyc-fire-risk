@@ -89,7 +89,7 @@ def make_feature_importance_chart(importance_df: pd.DataFrame, top_n: int = 10) 
     return fig
 
 
-def make_monthly_chart(monthly_data: list | np.ndarray, title: str = "Monthly Distribution") -> go.Figure:
+def make_monthly_chart(monthly_data: object, title: str = "Monthly Distribution") -> go.Figure:
     """Bar chart of monthly incident distribution."""
     months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

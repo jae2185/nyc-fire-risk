@@ -193,7 +193,7 @@ def main():
         )
 
         st.divider()
-        if st.button("🔄 Retrain Model", use_container_width=True,
+        if st.button("🔄 Retrain Model", width="stretch",
                       help="Force re-fetch data and retrain. Use if data is stale."):
             if CACHE_FILE.exists():
                 CACHE_FILE.unlink()
@@ -274,7 +274,7 @@ def main():
                 st.dataframe(
                     active_df[[label_col, "structural_fires", "risk_score", "risk_label"]]
                     .sort_values("risk_score", ascending=False),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         with col_side:
@@ -290,7 +290,7 @@ def main():
                 if st.button(
                     f"{icon}{zone_id}  ·  {rl}  ·  {fires} fires",
                     key=f"risk_btn_{zone_id}",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     # Toggle: click again to deselect
                     st.session_state.selected_zone = zone_id if zone_id != selected else None
@@ -298,7 +298,7 @@ def main():
 
             # Clear selection
             if selected is not None:
-                if st.button("✕ Clear selection", key="clear_sel", use_container_width=True):
+                if st.button("✕ Clear selection", key="clear_sel", width="stretch"):
                     st.session_state.selected_zone = None
                     st.rerun()
 
@@ -330,7 +330,7 @@ def main():
             if existing:
                 monthly_total = active_df[existing].sum().values
                 fig = make_monthly_chart(monthly_total, "Citywide Monthly Pattern")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     # ── TAB: Rankings ────────────────────────────────────────────────────
     with tab_rankings:
@@ -348,13 +348,13 @@ def main():
         display_df["structural_fire_rate"] = display_df["structural_fire_rate"].map("{:.1%}".format)
         display_df["risk_score"] = display_df["risk_score"].map("{:.3f}".format)
         display_df["predicted_fires"] = display_df["predicted_fires"].map("{:.0f}".format)
-        st.dataframe(display_df, use_container_width=True, height=500)
+        st.dataframe(display_df, width="stretch", height=500)
 
         # Borough comparison
         if granularity != "Borough":
             st.markdown("### Borough Comparison")
             fig = make_borough_comparison_chart(boro_features)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     # ── TAB: Model ───────────────────────────────────────────────────────
     with tab_model:
@@ -377,17 +377,17 @@ def main():
             X, y = data["X"], data["y"]
             preds = model.predict(X)
             fig = make_actual_vs_predicted_chart(y, preds)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_m2:
             st.markdown("### Feature Importance")
             fig = make_feature_importance_chart(results["importance"])
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Risk distribution
             st.markdown("### Risk Distribution")
             fig = make_risk_distribution_chart(active_df["risk_score"].values)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         # Model description
         with st.expander("Model Architecture Details"):
@@ -465,7 +465,7 @@ def main():
                 if existing:
                     monthly_vals = [row[c] for c in existing]
                     fig = make_monthly_chart(monthly_vals, f"Monthly Distribution — {selected_explorer}")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Show constituent zips for PUMA view
                 if granularity == "PUMA" and "puma_code" in row.index:
@@ -475,7 +475,7 @@ def main():
                         st.markdown(f"**Constituent Zip Codes** ({len(constituent_zips)})")
                         cz = constituent_zips[["zip_code", "structural_fires", "risk_score", "risk_label"]].sort_values("risk_score", ascending=False).copy()
                         cz["risk_score"] = cz["risk_score"].map("{:.3f}".format)
-                        st.dataframe(cz, use_container_width=True, height=250)
+                        st.dataframe(cz, width="stretch", height=250)
 
     # ── TAB: Buildings ───────────────────────────────────────────────────
     with tab_buildings:
@@ -513,7 +513,7 @@ def main():
             key="bldg_limit",
         )
 
-        if st.button("🔍 Load & Score Buildings", key="load_buildings", use_container_width=True):
+        if st.button("🔍 Load & Score Buildings", key="load_buildings", width="stretch"):
             with st.spinner("Fetching building data from PLUTO API..."):
                 raw_buildings = fetch_pluto_buildings(
                     zip_code=bldg_zip,
@@ -621,7 +621,7 @@ def main():
                 top_display = top_bldgs[display_bldg_cols].copy()
                 top_display["risk_score"] = top_display["risk_score"].map("{:.3f}".format)
                 top_display["yearbuilt"] = top_display["yearbuilt"].astype(int)
-                st.dataframe(top_display, use_container_width=True, height=350)
+                st.dataframe(top_display, width="stretch", height=350)
 
                 # Risk breakdown
                 st.markdown("**Risk Distribution**")

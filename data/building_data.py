@@ -27,7 +27,7 @@ DOB_VIOLATIONS_ENDPOINT = "https://data.cityofnewyork.us/resource/3h2n-5cm9.json
 
 # Key PLUTO columns we need
 PLUTO_COLUMNS = [
-    "bbl", "borough", "address", "postcode", "bldgclass", "landuse",
+    "bbl", "borough", "address", "zipcode", "bldgclass", "landuse",
     "yearbuilt", "numfloors", "unitsres", "unitstotal", "bldgarea",
     "lotarea", "numbldgs", "assesstot", "assessland",
     "latitude", "longitude", "zonedist1", "firecomp",
@@ -67,7 +67,7 @@ def fetch_pluto_buildings(zip_code=None, borough=None, limit=5000):
     }
 
     if zip_code:
-        params["$where"] += f" AND postcode = '{zip_code}'"
+        params["$where"] += f" AND zipcode = '{zip_code}'"
     elif borough:
         boro_map = {
             "Manhattan": "MN", "Bronx": "BX", "Brooklyn": "BK",
@@ -84,25 +84,32 @@ def fetch_pluto_buildings(zip_code=None, borough=None, limit=5000):
         params["$limit"] = batch_size
         params["$offset"] = offset
         try:
-            resp = requests.get(PLUTO_ENDPOINT, params=params, timeout=30)
+            print(f"[PLUTO] Fetching offset={offset}, batch={batch_size}")
+            resp = requests.get(PLUTO_ENDPOINT, params=params, timeout=45)
+            print(f"[PLUTO] Status: {resp.status_code}, length: {len(resp.content)}")
             if resp.status_code == 200:
                 data = resp.json()
                 if not data:
+                    print("[PLUTO] Empty response, done.")
                     break
                 all_records.extend(data)
+                print(f"[PLUTO] Got {len(data)} records (total: {len(all_records)})")
                 if len(data) < batch_size:
                     break
                 offset += batch_size
             else:
+                print(f"[PLUTO] Bad status: {resp.status_code} - {resp.text[:200]}")
                 break
         except Exception as e:
-            print(f"PLUTO API error at offset {offset}: {e}")
+            print(f"[PLUTO] API error at offset {offset}: {e}")
             break
         time.sleep(0.2)
 
     if all_records:
+        print(f"[PLUTO] Success: {len(all_records)} total buildings from API")
         return pd.DataFrame(all_records)
     else:
+        print("[PLUTO] No API data, using synthetic fallback")
         return _generate_synthetic_buildings(zip_code, borough)
 
 
@@ -231,15 +238,15 @@ def score_buildings_with_neighborhood(buildings_df, zip_features_df):
     df = buildings_df.copy()
 
     # Merge neighborhood risk
-    if "postcode" in df.columns and "zip_code" in zip_features_df.columns:
+    if "zipcode" in df.columns and "zip_code" in zip_features_df.columns:
         zip_risk = zip_features_df[["zip_code", "risk_score", "structural_fire_rate"]].copy()
         zip_risk = zip_risk.rename(columns={
             "risk_score": "neighborhood_risk",
             "structural_fire_rate": "neighborhood_fire_rate",
         })
-        df["postcode"] = df["postcode"].astype(str)
+        df["zipcode"] = df["zipcode"].astype(str)
         zip_risk["zip_code"] = zip_risk["zip_code"].astype(str)
-        df = df.merge(zip_risk, left_on="postcode", right_on="zip_code", how="left")
+        df = df.merge(zip_risk, left_on="zipcode", right_on="zip_code", how="left")
         df["neighborhood_risk"] = df["neighborhood_risk"].fillna(0.5)
         df["neighborhood_fire_rate"] = df["neighborhood_fire_rate"].fillna(0.15)
     else:
@@ -344,7 +351,7 @@ def _generate_synthetic_buildings(zip_code=None, borough=None, n=500):
             "bbl": f"{np.random.randint(1,6)}{np.random.randint(10000,99999):05d}{np.random.randint(1,9999):04d}",
             "borough": ["MN", "BX", "BK", "QN", "SI"][np.random.randint(0, 5)],
             "address": f"{np.random.randint(1, 999)} SAMPLE ST",
-            "postcode": zip_code_pick,
+            "zipcode": zip_code_pick,
             "bldgclass": np.random.choice(bldg_classes),
             "landuse": np.random.choice(land_uses),
             "yearbuilt": str(year),
